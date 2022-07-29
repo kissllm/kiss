@@ -1921,10 +1921,10 @@ create_tmp_dirs() {
     proc=${proc%"${proc##*[!/]}"}/$KISS_PID
 
     # Temporary cache directories.
-    mak_dir=$proc/build
-    pkg_dir=$proc/pkg
-    tar_dir=$proc/extract
-    tmp_dir=$proc/tmp
+    mak_dir=$cac_dir/working/build
+    pkg_dir=$cac_dir/working/pkg
+    tar_dir=$cac_dir/working/extract
+    tmp_dir=$cac_dir/working/tmp
 
     mkdir -p "$src_dir" "$log_dir" "$bin_dir" \
              "$mak_dir" "$pkg_dir" "$tar_dir" "$tmp_dir"
