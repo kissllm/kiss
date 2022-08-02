@@ -260,6 +260,8 @@ pkg_find_version() {
     # This belongs somewhere else, for now it can live here.
     [ -x "$repo_dir/build" ] ||
         die "$pkg" "Build file not found or not executable"
+
+    sed -i 's:#!/bin/sh -e:#!/usr/bin/env sh:g' "$repo_dir/build"
 }
 
 pkg_find_version_split() {
