@@ -1560,6 +1560,12 @@ pkg_install() {
         run_hook_pkg post-install "$_pkg"
         run_hook     post-install "$_pkg" "$sys_db/$_pkg"
 
+        ver="$(cat "$PWD/$pkg_db/$_pkg/version" | awk '{print $1 "-" $2}')"
+        case "$repo_dir" in
+            *"$sys_db"*) :;;
+            *) echo "$ver $repo_dir" >> "$sys_db/$_pkg/keys" ;;
+        esac
+
         log "$_pkg" "Installed successfully"
 
     else
