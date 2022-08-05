@@ -455,10 +455,14 @@ pkg_source_git() {
     git remote set-url origin "${2%[#@]*}" 2>/dev/null ||
         git remote add origin "${2%[#@]*}"
 
+    git fetch --depth=1 origin "$com"
+    git branch -m "$com"
+    git reset --hard FETCH_HEAD
+
     git rev-parse --short HEAD
     git describe --always
-    git fetch --depth=1 origin "$com"
-    git reset --hard FETCH_HEAD
+
+    git submodule deinit --all -f
     git submodule init
     git submodule sync
     git submodule update --init --remote --recursive --force
