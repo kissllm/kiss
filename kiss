@@ -455,8 +455,13 @@ pkg_source_git() {
     git remote set-url origin "${2%[#@]*}" 2>/dev/null ||
         git remote add origin "${2%[#@]*}"
 
+    git rev-parse --short HEAD
+    git describe --always
     git fetch --depth=1 origin "$com"
     git reset --hard FETCH_HEAD
+    git submodule init
+    git submodule sync
+    git submodule update --init --remote --recursive --force
 }
 
 pkg_source_tar() {
@@ -530,7 +535,8 @@ pkg_extract() {
 
         case $_res in
             git+*)
-                cp -LRf "$_des/." .
+                # cp -LRf "$_des/." .
+                rsync -aqz "$_des/." .
             ;;
 
             *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
@@ -981,7 +987,8 @@ pkg_build() {
     # before the build starts. 'tee' is run in a pipe and POSIX shell has no
     # pipe-fail causing confusing behavior when tee fails.
     : > "$log_dir/$1-$time-$KISS_PID"
-
+    meson_build=$(find "$pkg_dir/$1" -type f -name "meson.build")
+    [ -n "$meson_build" ] && meson setup --wipe
     # Call the build script, log the output to the terminal and to a file.
     # There's no PIPEFAIL in POSIX shell so we must resort to tricks like kill.
     {
