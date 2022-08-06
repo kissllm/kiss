@@ -456,7 +456,7 @@ pkg_source_git() {
         git remote add origin "${2%[#@]*}"
 
     git fetch --depth=1 origin "$com"
-    git branch -m "$com"
+    [ -n "$com" ] && git branch -m "$com"
     git reset --hard FETCH_HEAD
 
     git rev-parse --short HEAD
