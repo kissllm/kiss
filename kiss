@@ -991,8 +991,21 @@ pkg_build() {
     # before the build starts. 'tee' is run in a pipe and POSIX shell has no
     # pipe-fail causing confusing behavior when tee fails.
     : > "$log_dir/$1-$time-$KISS_PID"
+
     meson_build=$(find "$pkg_dir/$1" -type f -name "meson.build")
     [ -n "$meson_build" ] && meson setup --wipe
+
+    if [ -n "${USE_GMAKE}" ]; then
+        printf "\n%s\n\n" "GNU make used"
+        build_root="${HOME}/.cache/kiss/working"
+        [ ! -d "${build_root}/bin" ] && mkdir -p "${build_root}/bin"
+        [ "$(readlink "${build_root}/bin/gunzip")" != "/usr/bin/pigz" ] && \ln -sf "/usr/bin/pigz" "${build_root}/bin/gunzip"
+        [ "$(readlink "${build_root}/bin/make")" != "/usr/bin/gmake" ] && \ln -sf "/usr/bin/gmake" "${build_root}/bin/make"
+        export PATH="${build_root}/bin:$PATH"
+    else
+        printf "\n%s\n\n" "BSD make used"
+    fi
+
     # Call the build script, log the output to the terminal and to a file.
     # There's no PIPEFAIL in POSIX shell so we must resort to tricks like kill.
     {
