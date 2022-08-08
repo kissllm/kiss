@@ -452,11 +452,15 @@ pkg_source_git() {
 
     [ -d .git ] || git init
 
-    git remote set-url origin "${2%[#@]*}" 2>/dev/null ||
-        git remote add origin "${2%[#@]*}"
+    url="${2%[#@]*}"
+    git remote set-url origin "${url}" 2>/dev/null ||
+        git remote add origin "${url}"
 
-    git fetch --depth=1 origin "$com"
-    [ -n "$com" ] && git branch -m "$com"
+    echo "branch = $com"
+    echo "url    = ${url}"
+    echo "\$PWD  = $PWD"
+
+    ( git fetch --depth 1 "${url}" 2>/dev/null ) ||  git fetch "${url}"
     git reset --hard FETCH_HEAD
 
     git rev-parse --short HEAD
