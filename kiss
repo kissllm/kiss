@@ -1596,16 +1596,18 @@ pkg_install() {
             *"${sys_db}"*)
                 packages="$(find "$REPO_ROOT" \( -type d -o -type l \) -path "$sys_db" -prune -o -name "${_pkg}" -print)"
                 if [ -n "$packages" ]; then
+                    index=0
+                    matched=0
                     for pack in $packages; do
-                        if diff -bwurB "$sys_db/$_pkg/version" "$pack/version" > /dev/nvull 2>&1; then
+                        if diff -bwurB "$sys_db/$_pkg/version" "$pack/version" > /dev/null 2>&1; then
                             printf "%-20s = %-10s %s\n" "Found version \$pack" "$(cat "$pack/version")" "$pack"
-                            if diff -bwurB "$sys_db/$_pkg/build" "$pack/build" > /dev/nvull 2>&1; then
+                            if diff -bwurB "$sys_db/$_pkg/build" "$pack/build" > /dev/null 2>&1; then
                                 printf "%-20s = %s\n" "Found buld \$pack" "$pack"
                                 file_list=$(find "$pack" -type f -name "*")
                                 found_diff=0
                                 for file in $file_list; do
                                     if [ "$(basename "$file")" != "keys" ] && [ "$(basename "$file")" != "manifest" ]; then
-                                        if ! diff -bwurB "$sys_db/$_pkg/$(basename "$file")" "$file" > /dev/nvull 2>&1; then
+                                        if ! diff -bwurB "$sys_db/$_pkg/$(basename "$file")" "$file" > /dev/null 2>&1; then
                                             printf "%-20s = %s\n" "Found \$file difference" "$file"
                                             found_diff=1
                                         fi
@@ -1614,27 +1616,34 @@ pkg_install() {
                                 if [ ${found_diff} -eq 0 ]; then
                                     printf "%-20s = %s\n" "Found \$pack reference" "$pack"
                                     while IFS= read -r line || [ -n "$line" ]; do
-                                        echo "Text read from ksys file: $line"
-                                        if [ "$line" != "$ver $pack" ]; then
-                                            echo "$line" >> "$sys_db/$_pkg/keys-temp"
+                                        key=$(echo $line | awk '{print $1}')
+                                        value=$(echo $line | awk '{print $2}')
+                                        printf "%-4s %-15s %s\n" "$index" "$key" "$value"
+                                        if [ "$value" != "$pack" ]; then
+                                            printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
                                         fi
                                     done < "$sys_db/$_pkg/keys"
 
-                                    echo "$ver $pack" >> "$sys_db/$_pkg/keys-temp"
+                                    printf "%-15s %s\n" "$ver" "$pack" >> "$sys_db/$_pkg/keys-temp"
                                     \mv -f "$sys_db/$_pkg/keys-temp" "$sys_db/$_pkg/keys"
+                                    matched=1
                                     break
                                 fi
+                                index=$(($index + 1))
                             fi
                         fi
                     done
+                    if [ $matched -eq 0 ]; then
+                        echo "No repositories contain this version of package. Please back it up manually."
+                    fi
                 else
                     printf "%-20s = %s\n" "Backup $sys_db/$_pkg to" "$REPO_MAIN/extra/"
                     rsync -aqz "$sys_db/$_pkg" "$REPO_MAIN/extra/"
                 fi
                 ;;
             *)
-                echo "$ver $repo_dir" >> "$sys_db/$_pkg/keys"
-                printf "%-20s = %s\n" "Applied keys" "$(cat "$sys_db/$_pkg/keys")"
+                printf "%-15s %s\n" "$ver" "$repo_dir" >> "$sys_db/$_pkg/keys"
+                printf "%-20s = %s\n" "Applied keys" "$(cat "$sys_db/$_pkg/keys" | grep "$ver")"
                 ;;
         esac
 
