@@ -456,9 +456,9 @@ pkg_source_git() {
     git remote set-url origin "${url}" 2>/dev/null ||
         git remote add origin "${url}"
 
-    echo "branch = $com"
-    echo "url    = ${url}"
-    echo "\$PWD  = $PWD"
+    printf "%-20s = %s\n" "branch" "$com"
+    printf "%-20s = %s\n" "url" "${url}"
+    printf "%-20s = %s\n" "PWD" "$PWD"
 
     ( git fetch --depth 1 "${url}" 2>/dev/null ) ||  git fetch "${url}"
     git reset --hard FETCH_HEAD
@@ -1592,11 +1592,11 @@ pkg_install() {
         printf "%-20s = %s\n" "\$PWD/\$pkg_db/\$_pkg" "$PWD/$pkg_db/$_pkg"
 
         ver="$(cat "$PWD/$pkg_db/$_pkg/version" | awk '{print $1 "-" $2}')"
+        index=0
         case "$repo_dir" in
             *"${sys_db}"*)
                 packages="$(find "$REPO_ROOT" \( -type d -o -type l \) -path "$sys_db" -prune -o -name "${_pkg}" -print)"
                 if [ -n "$packages" ]; then
-                    index=0
                     matched=0
                     for pack in $packages; do
                         if diff -bwurB "$sys_db/$_pkg/version" "$pack/version" > /dev/null 2>&1; then
@@ -1618,8 +1618,8 @@ pkg_install() {
                                     while IFS= read -r line || [ -n "$line" ]; do
                                         key=$(echo $line | awk '{print $1}')
                                         value=$(echo $line | awk '{print $2}')
-                                        printf "%-4s %-15s %s\n" "$index" "$key" "$value"
-                                        if [ "$value" != "$pack" ]; then
+                                        if [ "$ver" != "$key" ] && [ "$value" != "$pack" ]; then
+                                            printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
                                             printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
                                         fi
                                     done < "$sys_db/$_pkg/keys"
@@ -1642,8 +1642,20 @@ pkg_install() {
                 fi
                 ;;
             *)
-                printf "%-15s %s\n" "$ver" "$repo_dir" >> "$sys_db/$_pkg/keys"
-                printf "%-20s = %s\n" "Applied keys" "$(cat "$sys_db/$_pkg/keys" | grep "$ver")"
+                while IFS= read -r line || [ -n "$line" ]; do
+                    key=$(echo $line | awk '{print $1}')
+                    value=$(echo $line | awk '{print $2}')
+                    if [ "$ver" != "$key" ] && [ "$value" != "$repo_dir" ]; then
+                        printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
+                        printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
+                    fi
+                    index=$(($index + 1))
+                done < "$sys_db/$_pkg/keys"
+
+                printf "%-15s %s\n" "$ver" "$repo_dir" >> "$sys_db/$_pkg/keys-temp"
+                \mv -f "$sys_db/$_pkg/keys-temp" "$sys_db/$_pkg/keys"
+                printf "%-20s = %s\n" "Applied key \"$(cat "$sys_db/$_pkg/keys" | grep "$ver" | awk '{print $1}')\"" \
+                    "$(cat "$sys_db/$_pkg/keys" | grep "$ver" | awk '{print $2}')"
                 ;;
         esac
 
@@ -2007,13 +2019,14 @@ create_tmp_dirs() {
 
     # Top-level Temporary cache directory.
     proc=${KISS_TMPDIR:="$cac_dir/proc"}
-    proc=${proc%"${proc##*[!/]}"}/$KISS_PID
+    # proc=${proc%"${proc##*[!/]}"}/$KISS_PID
+    proc=${proc%"${proc##*[!/]}"}
 
     # Temporary cache directories.
-    mak_dir=$cac_dir/working/build
-    pkg_dir=$cac_dir/working/pkg
-    tar_dir=$cac_dir/working/extract
-    tmp_dir=$cac_dir/working/tmp
+    mak_dir=$proc/build
+    pkg_dir=$proc/pkg
+    tar_dir=$proc/extract
+    tmp_dir=$proc/tmp
 
     mkdir -p "$src_dir" "$log_dir" "$bin_dir" \
              "$mak_dir" "$pkg_dir" "$tar_dir" "$tmp_dir"
