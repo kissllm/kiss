@@ -1615,15 +1615,16 @@ pkg_install() {
                                 done
                                 if [ ${found_diff} -eq 0 ]; then
                                     printf "%-20s = %s\n" "Found \$pack reference" "$pack"
-                                    while IFS= read -r line || [ -n "$line" ]; do
-                                        key=$(echo $line | awk '{print $1}')
-                                        value=$(echo $line | awk '{print $2}')
-                                        if [ "$ver" != "$key" ] && [ "$value" != "$pack" ]; then
-                                            printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
-                                            printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
-                                        fi
-                                    done < "$sys_db/$_pkg/keys"
-
+                                    [ -f "$sys_db/$_pkg/keys" ] && {
+                                        while IFS= read -r line || [ -n "$line" ]; do
+                                            key=$(echo $line | awk '{print $1}')
+                                            value=$(echo $line | awk '{print $2}')
+                                            if [ "$ver" != "$key" ] && [ "$value" != "$pack" ]; then
+                                                printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
+                                                printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
+                                            fi
+                                        done < "$sys_db/$_pkg/keys"
+                                    }
                                     printf "%-15s %s\n" "$ver" "$pack" >> "$sys_db/$_pkg/keys-temp"
                                     \mv -f "$sys_db/$_pkg/keys-temp" "$sys_db/$_pkg/keys"
                                     matched=1
@@ -1642,16 +1643,17 @@ pkg_install() {
                 fi
                 ;;
             *)
-                while IFS= read -r line || [ -n "$line" ]; do
-                    key=$(echo $line | awk '{print $1}')
-                    value=$(echo $line | awk '{print $2}')
-                    if [ "$ver" != "$key" ] && [ "$value" != "$repo_dir" ]; then
-                        printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
-                        printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
-                    fi
-                    index=$(($index + 1))
-                done < "$sys_db/$_pkg/keys"
-
+                [ -f "$sys_db/$_pkg/keys" ] && {
+                    while IFS= read -r line || [ -n "$line" ]; do
+                        key=$(echo $line | awk '{print $1}')
+                        value=$(echo $line | awk '{print $2}')
+                        if [ "$ver" != "$key" ] && [ "$value" != "$repo_dir" ]; then
+                            printf "%-4s %-15s = %s\n" "$index" "$key" "$value"
+                            printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$_pkg/keys-temp"
+                        fi
+                        index=$(($index + 1))
+                    done < "$sys_db/$_pkg/keys"
+                }
                 printf "%-15s %s\n" "$ver" "$repo_dir" >> "$sys_db/$_pkg/keys-temp"
                 \mv -f "$sys_db/$_pkg/keys-temp" "$sys_db/$_pkg/keys"
                 printf "%-20s = %s\n" "Applied key \"$(cat "$sys_db/$_pkg/keys" | grep "$ver" | awk '{print $1}')\"" \
