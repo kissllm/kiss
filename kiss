@@ -666,20 +666,20 @@ pick_up() {
     for pack in $packages
     do
         [ -d "$pack" ] && [ -f "$pack/version" ] && {
-            read -r ver sub_ver 2>/dev/null < "$pack/version" || {
+            read -r repo_ver repo_rel 2>/dev/null < "$pack/version" || {
                 printf "%s\n" "Failed to read version file ($pack/version)"
                 exit 1
             }
-            printf "%-4d %-9s %-4s %s\n" $((index)) "$ver" "$sub_ver" "$pack"
-            if [ -n "$2" ] && [ $index = $2 ]; then
+            printf "%-4d %-9s %-4s %s\n" $((index)) "$repo_ver" "$repo_rel" "$pack"
+            [ -n "$2" ] && [ "$index" = "$2" ] && {
                 selected="$pack"
-                ver_selected="$ver"
-                sub_ver_selected="$sub_ver"
-            fi
+                ver_selected="$repo_ver"
+                sub_ver_selected="$repo_rel"
+            }
             index=$(($index + 1))
         }
     done
-    if [ -n "$selected" ]; then
+    [ -n "$selected" ] && {
         printf "\n%s\n%-4d %-9s %-4s %s\n\n" "Selected package:" $2  "$ver_selected" "$sub_ver_selected" "$selected"
         local dir="$(dirname "$selected")"
         local base="$(basename "$selected")"
@@ -697,28 +697,13 @@ pick_up() {
         /usr/bin/kiss c $base 2>&1 > /dev/stderr &&
         /usr/bin/kiss b $base 2>&1 > /dev/stderr &&
         /usr/bin/kiss i $base
-    fi
+    }
 }
-
-# # $1 pkg
-# # $2 option: "all" for executable and "" for repository
-# # $4 -d or -x
-# # $5 $KISS_PATH / $sys_db or $PATH
-# pkg_find() {
-#     debug "$FUNCNAME" 'enter'
-#     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-#     local pkg="$1"
-#     # _pkg_find "$@" || die "$FUNCNAME" "'$pkg' not found"
-#     local repo_dir="$(_pkg_find "$@" | awk 'BEGIN{ RS = ""; FS = "\n" }{print $NF}')"
-#     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "not found"
-#     debug "$FUNCNAME" '$repo_dir' "$repo_dir"
-#     printf "%s" "$repo_dir"
-# }
 
 # Figure out which repository a package belongs to
 # or print applications in $PATH
 # $1 pkg name
-# $2 select option: "all" for executable and "" for repository
+# $2 select option: "all" for repositories and "" for the 1st repository
 # $3 shell flag: -d / -x
 # $4 $KISS_PATH / $sys_db / $PATH
 # $5 result
@@ -2548,7 +2533,7 @@ pkg_install() {
 
         [ -d "$pkg_dir/$pkg_db/$pkg_name" ] || echo "Directory does not exist"
 
-        ver="$(cat "$pkg_dir/$pkg_db/$pkg_name/version" | awk '{print $1 "-" $2}')"
+        local repo_ver="$(cat "$pkg_dir/$pkg_db/$pkg_name/version" | awk '{print $1 "-" $2}')"
         index=0
         case "$repo_dir" in
             *"${sys_db}"*)
@@ -2584,13 +2569,13 @@ pkg_install() {
                                         key="$(echo $line | awk '{print $1}')"
                                         value="$(echo $line | awk '{print $2}')"
                                         [ -n "$key" ] && [ -n "$value" ] &&
-                                        [ "$ver" != "$key" ] && [ "$value" != "$pack" ] && {
+                                        [ "$repo_ver" != "$key" ] && [ "$value" != "$pack" ] && {
                                             printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
                                             printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
                                         }
                                     done < "$sys_db/$pkg_name/keys"
                                 }
-                                printf "%-15s %s\n" "$ver" "$pack" >> "$sys_db/$pkg_name/keys-temp"
+                                printf "%-15s %s\n" "$repo_ver" "$pack" >> "$sys_db/$pkg_name/keys-temp"
                                 \mv -f "$sys_db/$pkg_name/keys-temp" "$sys_db/$pkg_name/keys"
                                 matched=1
                                 break
@@ -2611,17 +2596,17 @@ pkg_install() {
                         key="$(echo $line | awk '{print $1}')"
                         value="$(echo $line | awk '{print $2}')"
                         [ -n "$key" ] && [ -n "$value" ] &&
-                        [ "$ver" != "$key" ] && [ "$value" != "$repo_dir" ] && {
+                        [ "$repo_ver" != "$key" ] && [ "$value" != "$repo_dir" ] && {
                             printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
                             printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
                         }
                         index=$(($index + 1))
                     done < "$sys_db/$pkg_name/keys"
                 }
-                printf "%-15s %s\n" "$ver" "$repo_dir" >> "$sys_db/$pkg_name/keys-temp"
+                printf "%-15s %s\n" "$repo_ver" "$repo_dir" >> "$sys_db/$pkg_name/keys-temp"
                 \mv -f "$sys_db/$pkg_name/keys-temp" "$sys_db/$pkg_name/keys"
-                log "$FUNCNAME" "repo[$(cat "$sys_db/$pkg_name/keys" | grep "$ver" | awk '{print $1}')]" \
-                    "$(cat "$sys_db/$pkg_name/keys" | grep "$ver" | awk '{print $2}')"
+                log "$FUNCNAME" "repo[$(cat "$sys_db/$pkg_name/keys" | grep "$repo_ver" | awk '{print $1}')]" \
+                    "$(cat "$sys_db/$pkg_name/keys" | grep "$repo_ver" | awk '{print $2}')"
                 ;;
         esac
 
@@ -3101,8 +3086,12 @@ args() {
         s|search)       for pkg do for item in $(delegate "pkg_find" "$pkg" all); do log "$pkg" "$item"; done; done ;;
         u|update)       pkg_update ;;
         U|upgrade)      pkg_upgrade ;;
-        v|version)      printf '5.5.28\n' ;;
-
+        # v|version)      printf '5.5.28\n' ;;
+        v|version)
+            IFS=$'\3' read -r _ _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$1" "" "" "$sys_db")
+            log "$FUNCNAME" '$repo_ver' "$repo_ver"
+            log "$FUNCNAME" '$repo_rel' "$repo_rel"
+            ;;
         '')
             log "$FUNCNAME" 'kiss [a|b|c|d|i|l|r|s|u|U|v] [pkg]...'
             log "$FUNCNAME" 'alternatives List and swap alternatives'
@@ -3116,7 +3105,7 @@ args() {
             log "$FUNCNAME" 'search'   'Search for packages'
             log "$FUNCNAME" 'update'   'Update the system and repositories'
             log "$FUNCNAME" 'upgrade'  'Update the system'
-            log "$FUNCNAME" 'version'  'Package manager version'
+            log "$FUNCNAME" 'version'  'Package version'
 
             printf '\nRun "kiss [H|help-ext]" to see all actions\n'
             ;;
