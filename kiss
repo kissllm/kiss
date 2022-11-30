@@ -717,8 +717,8 @@ pkg_find() {
     # directories matching the package name in $KISS_PATH/*.
     set -- "$1" "$2" "$3" "${4:-"$KISS_PATH"}"
     local pkg="$1"
-    pkg="$(standardize "$pkg")" # pkg=${pkg%%\*}
     local select="$2"
+    null "$select" && pkg="$(standardize "$pkg")" # pkg=${pkg%%\*}
     debug "$FUNCNAME " '$pkg' "$pkg [local]"
     local pkg_name="${pkg##*/}"
     debug "$FUNCNAME " '$pkg_name' "$pkg_name [local]"
@@ -769,15 +769,26 @@ pkg_find() {
             debug "$FUNCNAME" '$_found_path' "$_found_path"
         }
         set +f
-        local _found_pkg="$_found_path/$pkg_name"
-        debug "$FUNCNAME" '$_found_pkg' "$_found_pkg"
-        debug "$FUNCNAME" '$#' "$#"
-        debug "$FUNCNAME" '${3:--d}' "${3:--d}"
-        test "${3:--d}" "$_found_pkg" && {
-            set -f -- "$@" "$_found_pkg"
-            null "$select" && break
-        }
-        debug "$FUNCNAME" '$#' "$#"
+        if null "$select"; then
+            local _found_pkg="$_found_path/$pkg_name"
+            debug "$FUNCNAME" '$_found_pkg' "$_found_pkg"
+            debug "$FUNCNAME" '$#' "$#"
+            debug "$FUNCNAME" '${3:--d}' "${3:--d}"
+            test "${3:--d}" "$_found_pkg" && {
+                set -f -- "$@" "$_found_pkg"
+                null "$select" && break
+            }
+            debug "$FUNCNAME" '$#' "$#"
+        else
+            local _pkgs="$(\ls -1 "$_found_path" | grep "$(standardize "$pkg_name")" | tr "\n" " " 2>/dev/null)"
+            for _found_pkg in $_pkgs; do
+                _found_pkg="$_found_path/$_found_pkg"
+                _found_pkg="$(standardize "$_found_pkg")"
+                test "${3:--x}" "$_found_pkg" && {
+                    set -f -- "$@" "$_found_pkg"
+                }
+            done
+        fi
     done
 
     # debug "$FUNCNAME" '$#' "$#"
@@ -794,22 +805,17 @@ pkg_find() {
     local result=
     case $2-$# in
         *-4) ;;
-        -*)
+        -*) # null "$select"
             repo_dir="$(standardize "$5")"
             result="$repo_dir"
             repo_name="${5##*/}"
             debug "$FUNCNAME" '$repo_dir' "$repo_dir"
             ;;
-        *)
+        *)  # ok "$select"
             shift 4;
-            if ok "$select"; then
-                for item in $@; do
-                    result="$result $item"
-                done
-            else
-                debug "$FUNCNAME" '$1' "$1"
-                result="$(standardize "$1")"    # result="$(standardize "$@")"
-            fi
+            for item in $@; do
+                result="$result $item"
+            done
             debug "$FUNCNAME" '$applications' "$result"
     esac
     printf '\n%s' "$result"
@@ -2796,6 +2802,7 @@ pkg_help_ext() {
     set -- $(delegate "pkg_find" kiss-\* all -x "$PATH")
     null "$1" && die "$FUNCNAME" '$repo_dir' "$1"
 
+    local path_list
     # To align descriptions figure out which extension has the longest
     # name by doing a simple 'name > max ? name : max' on the basename
     # of the path with 'kiss-' stripped as well.
@@ -2805,15 +2812,20 @@ pkg_help_ext() {
     for path do
         p=${path#*/kiss-}
 
+        [ -d "$path" ] && continue
         case " $seen " in *" $p "*)
             shift
             continue
+            ;;
+            *) path_list="$path_list $path"
         esac
 
         seen=" $seen $p "
         max=$((${#p} > max ? ${#p}+1 : max))
     done
-
+    log "$FUNCNAME" '$#' "$#"
+    set -- $path_list
+    log "$FUNCNAME" '$#' "$#"
     IFS=\#$IFS
 
     # Print each extension, grab its description from the second line
