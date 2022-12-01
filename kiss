@@ -328,7 +328,7 @@ slot_aquire() {
     shift 1
 
     local src_address="$1"
-    local src_name="$(printf "%s" "${src_address##*/}")"
+    local src_name="${src_address##*/}"
     [ "$(expr substr $src_address 1 1)" = '/' ] && {
         local src_length=${#src_address}
         src_address="$(expr substr $src_address 2 $((src_length - 1)) )"
@@ -342,7 +342,7 @@ slot_aquire() {
     # _stack_bottom="$_stack_second"
     # _stack_second="$_stack_topend"
     _stack_topend="$tmp_dir/$src_address"
-    tmp_list="$(ls -x "$tmp_dir")"
+    tmp_list="$(\ls -x "$tmp_dir")"
     for item in $tmp_list; do
         [ "$item" = "$_stack_topend" ] && _stack_topend=""; break
     done
@@ -357,9 +357,10 @@ slot_aquire() {
     #     log "$FUNCNAME" '$_stack_topend' "$_stack_topend"
     #     die "$FUNCNAME" "$src_address" "Failed to aquire temporary file"
     # }
-    ok "$_stack_topend" && {
-        local dir_topend="$(dirname "$_stack_topend")"
-        [ ! -d "$dir_topend" ] && mkdir -p "$dir_topend"
+
+    null "$_stack_topend" || {
+        local dir_topend="${_stack_topend%/*}"
+        [ -d "$dir_topend" ] || mkdir -p "$dir_topend"
 
         : > "$_stack_topend" || war "$FUNCNAME" "$src_address" "Failed to create temporary file"
     }
@@ -379,7 +380,7 @@ slot_push() {
     trap 'eval echo "${trace_line}"' ERR
 
     local src_address="$1"
-    local src_name="$(printf "%s" "${src_address##*/}")"
+    local src_name="${src_address##*/}"
 
     # Create a uniquely named temporary file and make a duplicate of
     # the file in '$1' if it exists.
@@ -657,8 +658,11 @@ pkg_version_split() {
 # $1 target
 # $2 index: selected one
 pick_up() {
+    set -efE
+    trap 'Error in function $FUNCNAME at line $LINENO' ERR
     local index=0
     local target="${1}"
+    local target_index="${2}"
     local selected=
     local ver_selected=
     local sub_ver_selected=
@@ -671,7 +675,7 @@ pick_up() {
                 exit 1
             }
             printf "%-4d %-9s %-4s %s\n" $((index)) "$repo_ver" "$repo_rel" "$pack"
-            [ -n "$2" ] && [ "$index" = "$2" ] && {
+            null "$target_index" || [ "$index" != "$target_index" ] || {
                 selected="$pack"
                 ver_selected="$repo_ver"
                 sub_ver_selected="$repo_rel"
@@ -679,11 +683,11 @@ pick_up() {
             index=$(($index + 1))
         }
     done
-    [ -n "$selected" ] && {
-        printf "\n%s\n%-4d %-9s %-4s %s\n\n" "Selected package:" $2  "$ver_selected" "$sub_ver_selected" "$selected"
+    null "$selected" || {
+        printf "\n%s\n%-4d %-9s %-4s %s\n\n" "Selected package:" $target_index  "$ver_selected" "$sub_ver_selected" "$selected"
         local dir="$(dirname "$selected")"
         local base="$(basename "$selected")"
-        if [ -z "${USE_GMAKE}" ]; then
+        if null "${USE_GMAKE}"; then
             printf "\n%s\n\n" "BSD make used"
         else
             printf "\n%s\n\n" "GNU make used"
@@ -780,7 +784,7 @@ pkg_find() {
             }
             debug "$FUNCNAME" '$#' "$#"
         else
-            local _pkgs="$(\ls -1 "$_found_path" | grep "$(standardize "$pkg_name")" | tr "\n" " " 2>/dev/null)"
+            local _pkgs="$(\ls -1 "$_found_path" 2>/dev/null | grep "$(standardize "$pkg_name")" | tr "\n" " ")"
             for _found_pkg in $_pkgs; do
                 _found_pkg="$_found_path/$_found_pkg"
                 _found_pkg="$(standardize "$_found_pkg")"
@@ -1409,12 +1413,12 @@ pkg_fix_deps() {
 
         # The readelf mode requires ldd's output to resolve the library
         # path for a given file. If ldd fails, silently skip the file.
-        ldd=$(ldd -- "$pkg_dir/$_file" 2>/dev/null) || continue
+        local ldd="$(ldd -- "$pkg_dir/$_file" 2>/dev/null)" || continue
 
         # Attempt to get information from readelf. If this fails (or we
         # are in ldd mode), do full ldd mode (which has the downside of
         # listing dependencies of dependencies (and so on)).
-        elf=$("$cmd_elf" -d "$pkg_dir/$_file" 2>/dev/null) || elf=$ldd
+        local elf="$("$cmd_elf" -d "$pkg_dir/$_file" 2>/dev/null)" || elf=$ldd
 
         # Iterate over the output of readelf or ldd, extract file names,
         # resolve their paths and finally, figure out their owner.
@@ -1468,7 +1472,7 @@ pkg_fix_deps() {
             ! pkg_owner -e "$_rpath" "$@" ||
                 printf '%s\n' "$_owns"
 
-        esac done < <([ "$?" -eq 0 ] || :; printf "$elf\n")
+        esac done < <([ "$?" -eq 0 ] || :; printf "%s\n" "$elf")
     esac done < manifest |
 
     [ ! -s "depends" ] || {
@@ -1486,10 +1490,10 @@ pkg_fix_deps() {
         # Sort the depends file (including the existing depends file) and
         # remove any duplicate entries. This can't take into account comments
         # so they remain rather than being replaced.
-        sort -uk1,1 "$depends_clone" - > "$depends_fixed"
+        sort -u -k 1,1 "$depends_clone" /dev/stdout > "$depends_fixed"
 
         # If the depends file was modified, show a diff and replace it.
-        ! [ -s "$depends_fixed" ] || {
+        [ ! -s "$depends_fixed" ] || {
             diff -U 3 "$depends_clone" "$depends_fixed" 2>/dev/null || :
 
             log "$FUNCNAME to be depends" '$depends_fixed' "$depends_fixed"
@@ -2333,6 +2337,7 @@ installable() {
     # are satisfied.
     log "$FUNCNAME" "$pkg" "Checking if package installable"
 
+    log "$FUNCNAME" '$PWD'     "$PWD"
     log "$FUNCNAME" '$pkg'     "$pkg"
     log "$FUNCNAME" '$depents' "$depents"
 
@@ -3098,8 +3103,7 @@ args() {
         s|search)       for pkg do for item in $(delegate "pkg_find" "$pkg" all); do log "$pkg" "$item"; done; done ;;
         u|update)       pkg_update ;;
         U|upgrade)      pkg_upgrade ;;
-        # v|version)      printf '5.5.28\n' ;;
-        v|version)
+        v|version)      # printf '5.5.28\n' ;;
             IFS=$'\3' read -r _ _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$1" "" "" "$sys_db")
             log "$FUNCNAME" '$repo_ver' "$repo_ver"
             log "$FUNCNAME" '$repo_rel' "$repo_rel"
