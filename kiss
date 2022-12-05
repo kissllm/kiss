@@ -598,8 +598,8 @@ pkg_version() {
     local shell_flag="$3"
     local search_path="$4"
 
-    ver_pre=$repo_ver
-    rel_pre=$repo_rel
+    local ver_pre=$repo_ver
+    local rel_pre=$repo_rel
 
     local repo_dir="$(delegate "pkg_find" "$@")"
     if [ -d "$repo_dir" ]; then
@@ -608,7 +608,7 @@ pkg_version() {
         die "$FUNCNAME" '$repo_dir' "No such package ($pkg)"
     fi
 
-    IFS=$"(printf ' ')" read -r repo_ver repo_rel 2>/dev/null < "$repo_dir/version" ||
+    IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_dir/version" ||
         die "$FUNCNAME" "$pkg" "Failed to read version file ($repo_dir/version)"
 
     ok "$repo_rel" ||
@@ -618,10 +618,10 @@ pkg_version() {
     [ -x "$repo_dir/build" ] ||
         die "$FUNCNAME" "$pkg" "Build file not found or not executable"
 
-    debug "$FUNCNAME" '$ver_pre'  "$ver_pre"
-    debug "$FUNCNAME" '$rel_pre'  "$rel_pre"
-    debug "$FUNCNAME" '$repo_ver' "$repo_ver"
-    debug "$FUNCNAME" '$repo_rel' "$repo_rel"
+    log "$FUNCNAME" '$ver_pre'  "$ver_pre"
+    log "$FUNCNAME" '$rel_pre'  "$rel_pre"
+    log "$FUNCNAME" '$repo_ver' "$repo_ver"
+    log "$FUNCNAME" '$repo_rel' "$repo_rel"
 
     printf '%s\3%s\3%s\3%s\3%s\n' "$repo_dir" "$ver_pre" "$rel_pre" "$repo_ver" "$repo_rel"
 
@@ -700,7 +700,7 @@ pick_up() {
         export KISS_PATH=$dir
         /usr/bin/kiss c $base 2>&1 > /dev/stderr &&
         /usr/bin/kiss b $base 2>&1 > /dev/stderr &&
-        /usr/bin/kiss i $base
+        /usr/bin/kiss i $base 2>&1 > /dev/stderr
     }
 }
 
@@ -868,7 +868,7 @@ pkg_cache() {
     # Find the tarball of a package using a glob. Use the user's set compression
     # method if found or first match of the below glob.
 
-    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$1")
+    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
 
