@@ -2872,13 +2872,12 @@ trap_off() {
 }
 
 init_dirs() {
-    log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local ppwd="$1"
 
     local ppid="$(echo $PPID)"
     local uid="$(id -u)"
 
-    [ ! -d "/tmp/kiss/$uid" ] && mkdir -p "/tmp/kiss/$uid"
+    [ ! -d "/tmp$HOME/kiss" ] && mkdir -p "/tmp$HOME/kiss"
 
     # cd "/tmp/kiss/$uid"
     # list="$(ls -x /tmp/kiss/$uid)"
@@ -2887,7 +2886,7 @@ init_dirs() {
     # done
     # cd $ppwd
 
-    log_dir_original="/tmp/kiss/$uid"
+    log_dir_original="/tmp$HOME/kiss"
     mkdir -p "$log_dir_original"
     null "$log_dir" && log_dir="$log_dir_original"
     touch "$log_dir_original/build.log"
