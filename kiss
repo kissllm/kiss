@@ -411,7 +411,7 @@ mkcd() {
     if null "$1"; then
         die "$FUNCNAME" "can not create directories"
     else
-        log "$FUNCNAME" '$@' "$@"
+        log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
         [ "$(dirname "$1")" != "/" ] && mkdir -p "$@" && cd "$1" || log "$FUNCNAME" 'cd' 'trying to cd to /'
     fi
 }
@@ -422,13 +422,22 @@ replace() {
     # function takes pairs of arguments iterating two at a time
     # until everything has been replaced.
     _fnr="$1"
+    log "$FUNCNAME input" '$_fnr' "$_fnr"
     shift 1
 
     while :; do case $_fnr-$# in
-        *"$1"*) _fnr=${_fnr%"$1"*}${2}${_fnr##*"$1"} ;;
-           *-2) break ;;
-             *) shift 2
+        *"$1"*)
+            _fnr=${_fnr%"$1"*}${2}${_fnr##*"$1"}
+            log "$FUNCNAME" '$_fnr' "$_fnr"
+            ;;
+        *-2) break ;;
+        *)
+            shift 2
+            debug "$FUNCNAME" '$#' "$#"
+            debug "$FUNCNAME input" '$1' "$1"
+            debug "$FUNCNAME input" '$2' "$2"
     esac done
+    log "$FUNCNAME output" '$_fnr' "$_fnr"
 }
 
 # $1 path
@@ -795,8 +804,6 @@ pkg_find() {
         fi
     done
 
-    # debug "$FUNCNAME" '$#' "$#"
-    # debug "$FUNCNAME" '$@' "$@"
     log "$FUNCNAME" 'serach done'
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     log "$FUNCNAME" '$2-$#' "$2-$#"
@@ -922,20 +929,23 @@ pkg_source_resolve() {
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
     IFS=$'\3' read -r repo_dir repo_major repo_minor repo_patch repo_ident < <(pkg_version_split "$pkg_name")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
-
+    [ -z "$ARCH+x" ] && die "$FUNCNAME" "\$ARCH must be defined" ||
+    log "$FUNCNAME" '$ARCH' "$ARCH"
     # Surround each replacement with substitutions to handled escaped markers.
     # First substitution turns '\MARKER' into ' ' (can't appear in sources as
     # they're already split on whitespace), second replaces 'MARKER' with its
     # value and the third, turns ' ' into 'MARKER' (dropping \\).
     replace "${2%"${2##*[!/]}"}" \
-        \\VERSION \  VERSION "$repo_ver"   \  VERSION \
-        \\RELEASE \  RELEASE "$repo_rel"   \  RELEASE \
-        \\MAJOR   \  MAJOR   "$repo_major" \  MAJOR \
-        \\MINOR   \  MINOR   "$repo_minor" \  MINOR \
-        \\PATCH   \  PATCH   "$repo_patch" \  PATCH \
-        \\IDENT   \  IDENT   "$repo_ident" \  IDENT \
-        \\PACKAGE \  PACKAGE "$repo_name"  \  PACKAGE
+        "\\ARCH"    "\ " "ARCH"    "$ARCH"       "\ " "ARCH" \
+        "\\VERSION" "\ " "VERSION" "$repo_ver"   "\ " "VERSION" \
+        "\\RELEASE" "\ " "RELEASE" "$repo_rel"   "\ " "RELEASE" \
+        "\\MAJOR"   "\ " "MAJOR"   "$repo_major" "\ " "MAJOR" \
+        "\\MINOR"   "\ " "MINOR"   "$repo_minor" "\ " "MINOR" \
+        "\\PATCH"   "\ " "PATCH"   "$repo_patch" "\ " "PATCH" \
+        "\\IDENT"   "\ " "IDENT"   "$repo_ident" "\ " "IDENT" \
+        "\\PACKAGE" "\ " "PACKAGE" "$repo_name"  "\ " "PACKAGE"
 
+    log "$FUNCNAME" '$_fnr' "$_fnr"
     set -- "$1" "$_fnr" "${3%"${3##*[!/]}"}" "$4"
 
     # Git repository.
@@ -1007,7 +1017,7 @@ pkg_source() {
     log "$FUNCNAME" "$pkg_name" "Reading sources"
 
     while read -r src dest || ok "$src"; do
-        [ "$src" != '#' ] || continue
+        { [ "$src" != '#' ] || ok "${src%\#*}"; } || continue
         log "$FUNCNAME" '$src'  "$src"
         log "$FUNCNAME" '$dest' "$dest"
         IFS=$'\3' read -r _res _des < <(pkg_source_resolve "$pkg_name" "$src" "$dest" "$action")
