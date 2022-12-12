@@ -417,18 +417,18 @@ mkcd() {
 }
 
 replace() {
-    log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # Replace all occurrences of substrings with substrings. This
     # function takes pairs of arguments iterating two at a time
     # until everything has been replaced.
     _fnr="$1"
-    log "$FUNCNAME input" '$_fnr' "$_fnr"
+    debug "$FUNCNAME input" '$_fnr' "$_fnr"
     shift 1
 
     while :; do case $_fnr-$# in
         *"$1"*)
             _fnr=${_fnr%"$1"*}${2}${_fnr##*"$1"}
-            log "$FUNCNAME" '$_fnr' "$_fnr"
+            debug "$FUNCNAME" '$_fnr' "$_fnr"
             ;;
         *-2) break ;;
         *)
@@ -437,7 +437,7 @@ replace() {
             debug "$FUNCNAME input" '$1' "$1"
             debug "$FUNCNAME input" '$2' "$2"
     esac done
-    log "$FUNCNAME output" '$_fnr' "$_fnr"
+    debug "$FUNCNAME output" '$_fnr' "$_fnr"
 }
 
 # $1 path
@@ -465,8 +465,11 @@ as_user() {
     esac
 }
 
+# $1 parameter
+# $2 library
+# $3 manifest list
 pkg_owner() {
-    log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     ok "$2" || { set +f; set -f -- "$1" "$sys_db"/*/manifest; }
 
     _owns=$(grep -lxF "$@")
@@ -520,7 +523,7 @@ run_hook_pkg() {
 # $1 tar_file : tar file
 decompress() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    log "$FUNCNAME" '$tar_file' "$tar_file[global]"
+    log "$FUNCNAME" '$tar_file' "$tar_file [global]"
     local tar_file="$1"
     log "$FUNCNAME" '$pkg' "$pkg"
     if ok "$tar_file"; then
@@ -725,7 +728,7 @@ pkg_find() {
     trap 'Error in function $FUNCNAME at line $LINENO' ERR
     debug "$FUNCNAME" 'enter'
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    debug "$FUNCNAME" '$pkg' "$pkg[global]"
+    debug "$FUNCNAME" '$pkg' "$pkg [global]"
     # Figure out which repository a package belongs to by searching for
     # directories matching the package name in $KISS_PATH/*.
     set -- "$1" "$2" "$3" "${4:-"$KISS_PATH"}"
@@ -804,11 +807,11 @@ pkg_find() {
         fi
     done
 
-    log "$FUNCNAME" 'serach done'
-    log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    log "$FUNCNAME" '$2-$#' "$2-$#"
+    debug "$FUNCNAME" 'serach done'
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    debug "$FUNCNAME" '$2-$#' "$2-$#"
 
-    ok "$repo_dir" && debug "$FUNCNAME" '$repo_dir' "$repo_dir[global]"
+    ok "$repo_dir" && debug "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
 
     # Figure out which repository a package belongs to by searching for
     # Show all search results if called from 'kiss search', else store the
@@ -1016,7 +1019,7 @@ pkg_source() {
 
     log "$FUNCNAME" "$pkg_name" "Reading sources"
 
-    while read -r src dest || ok "$src"; do
+    while read -r src dest && ok "$src"; do
         { [ "$src" != '#' ] || ok "${src%\#*}"; } || continue
         log "$FUNCNAME" '$src'  "$src"
         log "$FUNCNAME" '$dest' "$dest"
@@ -1224,18 +1227,15 @@ pkg_depends() {
 *" ${4##* } "*" ${pkg} "\
 *" ${4##* } "*" ${pkg} "\
 *" ${4##* } "*" ${pkg} "*)
-        die "$FUNCNAME" "Circular dependency detected
-$pkg
-<>
-${4##* }"
+        die "$FUNCNAME" "$pkg <> ${4##* }" "circular dependency detected"
     esac
 
-    log "$FUNCNAME" '$repo_dir' "$repo_dir[global]"
+    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
     local repo_dir
-    if [ -d "$sys_db/$dep" ]; then
-        repo_dir="$sys_db/$dep"
+    if [ -d "$sys_db/$pkg" ]; then
+        repo_dir="$sys_db/$pkg"
     else
-        repo_dir="$(delegate "pkg_find" "$dep")"
+        repo_dir="$(delegate "pkg_find" "$pkg")"
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     fi
 
@@ -1625,12 +1625,12 @@ pkg_etcsums() {
 # $1 pkg : package name
 pkg_tar() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    log "$FUNCNAME" '$pkg' "$pkg[global]"
+    log "$FUNCNAME" '$pkg' "$pkg [global]"
     local bin_dir="$1"
     local pkg_dir="$2"
     local pkg="$3"
     local tar_file="$4"
-    log "$FUNCNAME" '$pkg' "$pkg[local]"
+    log "$FUNCNAME" '$pkg' "$pkg [local]"
 
     # Create a tarball from the built package's files. This tarball also
     # contains the package's database entry.
@@ -1759,7 +1759,7 @@ pkg_build_all() {
     for pkg do
         log "$FUNCNAME" "$pkg" "Building package ($((_build_cur+=1))/$#)"
 
-        log "$FUNCNAME" '$repo_dir' "$repo_dir[global]"
+        log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
         IFS=$'\3' read -r repo_dir repo_major repo_minor repo_patch repo_ident < <(pkg_version_split "$pkg")
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
 
@@ -1810,7 +1810,7 @@ pkg_build() {
     log "$FUNCNAME" '$bin_dir'  "$bin_dir"
     log "$FUNCNAME" '$log_dir'  "$log_dir"
     log "$FUNCNAME" '$repo_ver' "$repo_ver"
-    log "$FUNCNAME" '$repo_dir' "$repo_dir[global]"
+    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
     local repo_dir
     if null "$repo_dir"; then
         repo_dir="$(delegate "pkg_find" "$pkg")"
@@ -2385,7 +2385,7 @@ pkg_install() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg="$1"
     log "$FUNCNAME" '$pkg' "$pkg"
-    log "$FUNCNAME" '$repo_dir' "$repo_dir[global]"
+    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
     # Install a built package tarball.
     #
     # Package installation works similarly to the method used by Slackware in
@@ -2544,91 +2544,84 @@ pkg_install() {
         run_hook     post-install "$pkg_name" "$sys_db/$pkg_name"
 
         log "$FUNCNAME" '$sys_db'   "$sys_db"
-        log "$FUNCNAME" '$pkg_db'   "$pkg_db"
-        log "$FUNCNAME" '$pkg_name' "$pkg_name"
         log "$FUNCNAME" '$tar_dir'  "$tar_dir"  # /root/.cache/kiss/proc/$pkg_name/extract
         log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"  # /root/.cache/kiss/proc/$pkg_name/pkg
-        log "$FUNCNAME" '$repo_dir' "$repo_dir"
+        log "$FUNCNAME" '$pkg_db'   "$pkg_db"
+        log "$FUNCNAME" '$pkg_name' "$pkg_name"
         log "$FUNCNAME" '$pkg_dir/$pkg_db/$pkg_name' "$pkg_dir/$pkg_db/$pkg_name"
         log "$FUNCNAME" '$tar_dir/$pkg_db/$pkg_name' "$tar_dir/$pkg_db/$pkg_name"
 
         [ -d "$pkg_dir/$pkg_db/$pkg_name" ] || echo "Directory does not exist"
 
-        local repo_ver="$(cat "$pkg_dir/$pkg_db/$pkg_name/version" | awk '{print $1 "-" $2}')"
-        index=0
+        local repo_dir="$(delegate "pkg_find" "$pkg_name" "" "-d" "$KISS_PATH")"
+        log "$FUNCNAME" '$repo_dir' "$repo_dir"
+        # IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$pkg_dir/$pkg_db")
+        IFS=$' ' read -r repo_ver repo_rel < <(cat "$repo_dir/version")
+        local repo_ver_rel="$repo_ver-$repo_rel"
+        log "$FUNCNAME" '$repo_ver_rel' "$repo_ver_rel"
+        local index=0
         case "$repo_dir" in
             *"${sys_db}"*)
-                packages="$(find "$REPO_ROOT" \( -type d -o -type l \) -path "$sys_db" -prune -o -name "${pkg_name}" -print)"
-                if [ -n "$packages" ]; then
-                    matched=0
-                    for pack in $packages; do
-                        # Guaranteed performance with step-by-step filtering
-                        if diff -bwurB "$sys_db/$pkg_name/version" "$pack/version" > /dev/null 2>&1 &&
-                            diff -bwurB "$sys_db/$pkg_name/build" "$pack/build" > /dev/null 2>&1; then
-
-                            found_diff=0
-                            temp=
-                            diff_list=$(diff -qrN "$sys_db/$pkg_name" "$pack" | awk '{print $2}' | tr "\n" " ")
-                            for f in $diff_list; do
-                                fn=$(basename $f)
-                                [ "keys" != "$fn" ] &&
-                                [ "manifest" != "$fn" ] &&
-                                [ "etcsums" != "$fn" ] &&
-                                [ "depends" != "$fn" ] &&
-                                temp="$f $temp"
-                            done
-                            [ -n "$temp" ] && {
-                                found_diff=1
-                                for file in $temp; do
-                                    log "$FUNCNAME" "diff[$(basename $file)]" "$file"
-                                done
-                            }
-                            [ ${found_diff} -eq 0 ] && {
-                                log "$FUNCNAME" "${pkg_name}[$(cat "$pack/version" | awk '{print $1 "-" $2}')]" "$pack"
-                                [ -f "$sys_db/$pkg_name/keys" ] && {
-                                    while IFS= read -r line || [ -n "$line" ]; do
-                                        key="$(echo $line | awk '{print $1}')"
-                                        value="$(echo $line | awk '{print $2}')"
-                                        [ -n "$key" ] && [ -n "$value" ] &&
-                                        [ "$repo_ver" != "$key" ] && [ "$value" != "$pack" ] && {
-                                            printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
-                                            printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
-                                        }
-                                    done < "$sys_db/$pkg_name/keys"
+                local matched_all=0
+                local matched_name=0
+                for pack in $(find "$REPO_ROOT" \( -type d -o -type l \) -path "$sys_db" -prune -o -name "${pkg_name}" -print)
+                do
+                    log "$FUNCNAME" '$pack' "$pack"
+                    # Guaranteed performance with step-by-step filtering
+                    diff -bwurB "$sys_db/$pkg_name/version" "$pack/version" > /dev/null 2>&1 &&
+                    diff -bwurB "$sys_db/$pkg_name/build" "$pack/build" > /dev/null 2>&1 && {
+                        local temp=
+                        while IFS=$' ' read -r _ _ _ file _; do
+                            local base_name="${file##*/}"
+                            case "$base_name" in
+                                "keys"|"manifest"|"etcsums"|"depends") ;;
+                                *)
+                                    temp="$file $temp"
+                                    log "$FUNCNAME" "diff[$base_name]" "$file"
+                            esac
+                        done < <(diff -qrN "$sys_db/$pkg_name" "$pack")
+                        ok "$temp" || {
+                            IFS=$' ' read -r ver rel < <(cat "$pack/version")
+                            log "$FUNCNAME mapped" "${pkg_name}[$ver-$rel]" "$pack"
+                            [ ! -f "$sys_db/$pkg_name/keys" ] ||
+                            while IFS=$' ' read -r key value; do
+                                ok "$key" && ok "$value" &&
+                                [ "$repo_ver_rel" != "$key" ] && [ "$value" != "$pack" ] && {
+                                    printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
+                                    printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
                                 }
-                                printf "%-15s %s\n" "$repo_ver" "$pack" >> "$sys_db/$pkg_name/keys-temp"
-                                \mv -f "$sys_db/$pkg_name/keys-temp" "$sys_db/$pkg_name/keys"
-                                matched=1
-                                break
-                            }
-                            index=$(($index + 1))
-                        fi
-                    done
-                    [ $matched -eq 0 ] &&
-                    echo "No repositories contain this version of package. Please back it up manually."
-                else
-                    log "$FUNCNAME" "backup $sys_db/$pkg_name to" "$repo_main/extra/"
+                                index=$(($index + 1))
+                            done < "$sys_db/$pkg_name/keys"
+                            printf "%-15s %s\n" "$repo_ver_rel" "$pack" >> "$sys_db/$pkg_name/keys-temp"
+                            \mv -f "$sys_db/$pkg_name/keys-temp" "$sys_db/$pkg_name/keys"
+                            matched_all=1
+                            break
+                        }
+                    }
+                    matched_name=1
+                done
+                if [ "$matched_name" -eq 0 ]; then
+                    log "$FUNCNAME backup" "$sys_db/$pkg_name to" "$repo_main/extra/"
                     rsync -aqz "$sys_db/$pkg_name" "$repo_main/extra/"
+                else
+                    [ "$matched_all" -ne 0 ] ||
+                    war "$FUNCNAME" "No repositories contain this version of package. Please back it up manually."
                 fi
                 ;;
             *)
-                [ -f "$sys_db/$pkg_name/keys" ] && {
-                    while IFS= read -r line || [ -n "$line" ]; do
-                        key="$(echo $line | awk '{print $1}')"
-                        value="$(echo $line | awk '{print $2}')"
-                        [ -n "$key" ] && [ -n "$value" ] &&
-                        [ "$repo_ver" != "$key" ] && [ "$value" != "$repo_dir" ] && {
-                            printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
-                            printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
-                        }
-                        index=$(($index + 1))
-                    done < "$sys_db/$pkg_name/keys"
-                }
-                printf "%-15s %s\n" "$repo_ver" "$repo_dir" >> "$sys_db/$pkg_name/keys-temp"
+                [ ! -f "$sys_db/$pkg_name/keys" ] ||
+                while IFS=$' ' read -r key value; do
+                    ok "$key" && ok "$value" &&
+                    [ "$repo_ver_rel" != "$key" ] && [ "$value" != "$repo_dir" ] && {
+                        printf "%-4s %-15s = %s\n" "$index" "$key" "$value" > /dev/stderr
+                        printf "%-15s %s\n" "$key" "$value" >> "$sys_db/$pkg_name/keys-temp"
+                    }
+                    index=$(($index + 1))
+                done < "$sys_db/$pkg_name/keys"
+                printf "%-15s %s\n" "$repo_ver_rel" "$repo_dir" >> "$sys_db/$pkg_name/keys-temp"
                 \mv -f "$sys_db/$pkg_name/keys-temp" "$sys_db/$pkg_name/keys"
-                log "$FUNCNAME" "repo[$(cat "$sys_db/$pkg_name/keys" | grep "$repo_ver" | awk '{print $1}')]" \
-                    "$(cat "$sys_db/$pkg_name/keys" | grep "$repo_ver" | awk '{print $2}')"
-                ;;
+                IFS=$' ' read -r key value < <(cat "$sys_db/$pkg_name/keys" | grep "$repo_ver_rel")
+                log "$FUNCNAME pushed" "$pkg_name[$key]" "$value"
         esac
 
         log "$FUNCNAME" "$pkg_name" "Installed successfully"
@@ -3291,7 +3284,7 @@ main() {
     }
 
     init_dirs "$ppwd"
-    log "$FUNCNAME" '$log_dir_original' "$log_dir_original[global]"
+    log "$FUNCNAME" '$log_dir_original' "$log_dir_original [global]"
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
 
