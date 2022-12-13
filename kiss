@@ -377,7 +377,7 @@ slot_push() {
     log "$FUNCNAME" '$scope' "$scope"
     shift 1
 
-    trap 'eval echo "${trace_line}"' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
 
     local src_address="$1"
     local src_name="${src_address##*/}"
@@ -599,7 +599,7 @@ _sh256() {
 # $5 $KISS_PATH / $sys_db / $PATH
 pkg_version() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     local scope="$1"
     debug "$FUNCNAME" '$scope' "$scope"
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
@@ -639,10 +639,18 @@ pkg_version() {
 
 }
 
+pkg_version_display() {
+    log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local pkg
+    if ok "$1"; then pkg="$1"; else pkg="kiss"; fi
+    IFS=$'\3' read -r _ _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg" "" "" "$sys_db")
+    log "$FUNCNAME" '$repo_ver-$repo_rel' "$repo_ver-$repo_rel"
+}
+
 # $1 pkg_name
 pkg_version_split() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # https://stackoverflow.com/questions/2488715/idioms-for-returning-multiple-values-in-shell-scripting
     IFS=$'\3' read -r repo_dir _ _ repo_ver _ < <(pkg_version "$FUNCNAME" "$1")
@@ -671,7 +679,7 @@ pkg_version_split() {
 # $2 index: selected one
 pick_up() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     local index=0
     local target="${1}"
     local target_index="${2}"
@@ -725,7 +733,7 @@ pick_up() {
 # $5 result
 pkg_find() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     debug "$FUNCNAME" 'enter'
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     debug "$FUNCNAME" '$pkg' "$pkg [global]"
@@ -868,7 +876,7 @@ pkg_list_version() {
 # $1 pkg : package name
 pkg_cache() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local arguents="$@"
     local pkg="$1"
@@ -914,7 +922,7 @@ pkg_cache() {
 # $2 src                   : source link
 # $3 dest                  : destination / source folder name
 # $4 action
-pkg_source_resolve() {
+pkg_download_resolve() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg_name="$1"
     local repo_name="$pkg_name"
@@ -994,16 +1002,16 @@ pkg_source_resolve() {
     printf "%s\3%s\n" "$_res" "$_des"
 }
 
+# Download any remote package sources. The existence of local files is
+# also checked.
 # $1 pkg_name   : package name
 # $2 action  : action name
-pkg_source() {
+pkg_download() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg_name="$1"
     local action="$2"
     log "$FUNCNAME" '$pkg_name' "$pkg_name"
     log "$FUNCNAME" '$action'   "$action"
-    # Download any remote package sources. The existence of local files is
-    # also checked.
     IFS=$'\3' read -r repo_dir repo_major repo_minor repo_patch repo_ident < <(pkg_version_split "$pkg_name")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
 
@@ -1023,7 +1031,7 @@ pkg_source() {
         { [ "$src" != '#' ] || ok "${src%\#*}"; } || continue
         log "$FUNCNAME" '$src'  "$src"
         log "$FUNCNAME" '$dest' "$dest"
-        IFS=$'\3' read -r _res _des < <(pkg_source_resolve "$pkg_name" "$src" "$dest" "$action")
+        IFS=$'\3' read -r _res _des < <(pkg_download_resolve "$pkg_name" "$src" "$dest" "$action")
 
         # arg1: pre-source
         # arg2: package name
@@ -1037,7 +1045,7 @@ pkg_source() {
         case ${action}$_res in "${action}url+"*|git+*)
             log "$FUNCNAME" '$_des' "$_des"
             mkcd "$FUNCNAME" "${_des%/*}"
-            "pkg_source_${_res%%+*}" "$pkg_name" "$_des" "${_res##"${_res%%+*}+"}"
+            "pkg_download_${_res%%+*}" "$pkg_name" "$_des" "${_res##"${_res%%+*}+"}"
         esac
 
         # arg1: post-source
@@ -1048,7 +1056,7 @@ pkg_source() {
     done < "$repo_dir/sources"
 }
 
-pkg_source_url() {
+pkg_download_url() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local repo_name="$1"
     shift 1
@@ -1067,7 +1075,7 @@ pkg_source_url() {
     }
 }
 
-pkg_source_git() {
+pkg_download_git() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local repo_name="$1"
     shift 1
@@ -1101,7 +1109,7 @@ pkg_source_git() {
 # $1 $dest
 # $2 repo_name
 # $3 $_res
-pkg_source_tar() {
+pkg_download_tar() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local repo_name="$1"
     shift 1
@@ -1179,7 +1187,7 @@ pkg_extract() {
     run_hook pre-extract "$pkg" "$pkg_dir"
 
     while read -r src dest || ok "$src"; do
-        IFS=$'\3' read -r _res _des < <(pkg_source_resolve "$pkg_name" "$src" "$dest") > /dev/null
+        IFS=$'\3' read -r _res _des < <(pkg_download_resolve "$pkg_name" "$src" "$dest") > /dev/null
 
         # Create the source's directories if not null.
         null "$_res" || mkcd "$FUNCNAME" "$(standardize "$mak_dir/$dest")"
@@ -1190,7 +1198,7 @@ pkg_extract() {
             ;;
 
             *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
-                pkg_source_tar "$pkg_name" "$dest" "$_res"
+                pkg_download_tar "$pkg_name" "$dest" "$_res"
             ;;
 
             *?*)
@@ -1235,7 +1243,7 @@ pkg_depends() {
     if [ -d "$sys_db/$pkg" ]; then
         repo_dir="$sys_db/$pkg"
     else
-        repo_dir="$(delegate "pkg_find" "$pkg")"
+        repo_dir="$(delegate "pkg_find" "$pkg" "" "-d" "$KISS_PATH")"
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     fi
 
@@ -1740,7 +1748,7 @@ pkg_build_all() {
     done
 
     for pkg do
-        pkg_source "$pkg"
+        pkg_download "$pkg"
         ! [ -f "$repo_dir/sources" ] || pkg_verify "$repo_dir" "$pkg"
     done
 
@@ -1903,7 +1911,7 @@ pkg_checksum() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg="$1"
 
-    pkg_source "$pkg" c
+    pkg_download "$pkg" c
 
     log "$FUNCNAME" '$repo_dir' "$repo_dir"
     [ -f "$repo_dir/sources" ] || return 0
@@ -1928,7 +1936,7 @@ pkg_checksum_gen() {
     #
     # NOTE: repo_ comes from caller.
     while read -r src dest || ok "$src"; do
-        IFS=$'\3' read -r _res _des < <(pkg_source_resolve "$repo_name" "$src" "$dest") > /dev/null
+        IFS=$'\3' read -r _res _des < <(pkg_download_resolve "$repo_name" "$src" "$dest") > /dev/null
 
         case ${_res##git+*} in */*[!.])
             set -- "$@" "$_res"
@@ -2773,7 +2781,11 @@ pkg_upgrade() {
     log "$FUNCNAME" "" "Nothing to do"
 }
 
-trace_line='Error in function $FUNCNAME at line $LINENO'
+trace_line() {
+    local funcname="$1"
+    local lineno="$2"
+    log $funcname "Won't handle the function at line" "$lineno"
+}
 
 pkg_clean() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
@@ -2917,6 +2929,8 @@ init_dirs() {
     proc=${KISS_TMPDIR:="$cac_dir/proc"}
     proc=${proc%"${proc##*[!/]}"}
 
+    mkdir -p "$src_dir" "$proc"
+
     log "$FUNCNAME" '${time%-*}' "${time%-*}"
     log "$FUNCNAME" '${time}'    "${time}"
     log "$FUNCNAME" '$sys_db'    "$sys_db"
@@ -2954,7 +2968,7 @@ tmp_dirs() {
     # Removing "|| :", and adding the following line will get the same effect
     # [ $? -ne 0 ] && log "$FUNCNAME" "" "[] error occurred"
 
-    mkdir -p "$src_dir" "$log_dir" "$bin_dir" \
+    mkdir -p "$log_dir" "$bin_dir" \
         "$mak_dir" "$pkg_dir" "$tar_dir" "$tmp_dir"
 
 
@@ -2973,7 +2987,7 @@ tmp_dirs() {
 
 tmp_clean() {
     set -efE
-    trap 'Error in function $FUNCNAME at line $LINENO' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
     { [ "$log_dir" = "$log_dir_original" ] &&
     [ -f "$log_dir_original/build.log" ]; } || {
         debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
@@ -3014,7 +3028,7 @@ args() {
 
                 [!i]-*\!*|[!i]-*\**|[!i]-*\[*|[!i]-*\ *|\
                 [!i]-*\]*|[!i]-*/*|[!i]-*"$newline"*)
-                    die "$FUNCNAME" "Invalid argument: '!*[ ]/\\n' ('$_arg')"
+                    die "$FUNCNAME" "Might be wrong usage of argument: '!*[ ]/\\n' ('$_arg'). Use a package name, please."
                     ;;
             esac done
 
@@ -3096,7 +3110,7 @@ args() {
         a|alternatives) pkg_alternatives "$@" ;;
         b|build)        pkg_build_all "$@" ;;
         c|checksum)     for pkg do tmp_dirs "$pkg" "reset"; pkg_checksum "$pkg"; done ;;
-        d|download)     for pkg do tmp_dirs "$pkg" "reset"; pkg_source "$pkg"; done ;;
+        d|download)     for pkg do tmp_dirs "$pkg" "reset"; pkg_download "$pkg"; done ;;
         H|help-ext)     pkg_help_ext "$@" ;;
         i|install)      for pkg do tmp_dirs "$pkg"; pkg_install "$pkg"; done ;;
         l|list)         pkg_list_version "$FUNCNAME" "$@" ;;
@@ -3105,11 +3119,7 @@ args() {
         s|search)       for pkg do for item in $(delegate "pkg_find" "$pkg" all); do log "$pkg" "$item"; done; done ;;
         u|update)       pkg_update ;;
         U|upgrade)      pkg_upgrade ;;
-        v|version)      # printf '5.5.28\n' ;;
-            IFS=$'\3' read -r _ _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$1" "" "" "$sys_db")
-            log "$FUNCNAME" '$repo_ver' "$repo_ver"
-            log "$FUNCNAME" '$repo_rel' "$repo_rel"
-            ;;
+        v|version)      pkg_version_display $1 ;;
         '')
             log "$FUNCNAME" 'kiss [a|b|c|d|i|l|r|s|u|U|v] [pkg]...'
             log "$FUNCNAME" 'alternatives List and swap alternatives'
@@ -3255,7 +3265,7 @@ main() {
 
     # https://unix.stackexchange.com/questions/151771/getting-wrong-lineno-for-a-trapped-function
     set -efE # set -ef # set -exf
-    trap 'eval echo "${trace_line}"' ERR
+    trap '$(trace_line "$FUNCNAME" "$LINENO")' ERR
 
     # Store the original working directory to ensure that relative paths
     # passed by the user on the command-line properly resolve to locations
