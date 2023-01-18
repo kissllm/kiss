@@ -65,7 +65,7 @@ run() {
 }
 
 # Some maintainers might print debug information in a function's definition,
-# but which function has an output.
+# but which function has an output as a return value.
 # This delegation makes it sure of only getting the printf content after the last \n,
 # which content comes from a
 # function_name() { printf "\n%s" "$output"; }
@@ -810,11 +810,9 @@ pkg_find() {
             _found_path="$(standardize "$_found_path")"
             debug "$FUNCNAME" '$_found_path' "$_found_path"
         }
-        # case "$_found_path" in
-        #     *"/$pkg_name") _found_path="${_found_path%/*}"
-        # esac
         set +f
         if null "$list"; then
+            debug "$FUNCNAME" '$list' "$list"
             local _found_pkg="$_found_path/$pkg_name"
             debug "$FUNCNAME" '$_found_pkg' "$_found_pkg"
             debug "$FUNCNAME" '$#' "$#"
@@ -825,14 +823,18 @@ pkg_find() {
             }
             debug "$FUNCNAME" '$#' "$#"
         else    # ok "$list"
+            debug "$FUNCNAME" '$list' "$list"
             local _pkgs="$(\ls -1 "$_found_path" 2>/dev/null | grep "$(standardize "$pkg_name")")"
+            IFS=$newline
             for _found_pkg in $_pkgs; do
+                debug "$FUNCNAME" '$_found_pkg' "$_found_pkg"
                 _found_pkg="$_found_path/$_found_pkg"
                 _found_pkg="$(standardize "$_found_pkg")"
                 test "${test_key:--x}" "$_found_pkg" && {
                     set -f -- "$@" "$_found_pkg"
                 }
             done
+            IFS=$':'
         fi
     done
     unset IFS
@@ -842,7 +844,7 @@ pkg_find() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     debug "$FUNCNAME" '$list-$#' "$list-$#"
 
-    ok "$repo_dir" && debug "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
+    null "$repo_dir" || debug "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
 
     # Figure out which repository a package belongs to by searching for
     # Show all search results if called from 'kiss search', else store the
@@ -1617,7 +1619,7 @@ pkg_fix_deps() {
         [ ! -s "$depends_fixed" ] || {
             diff -U 3 "$depends_clone" "$depends_fixed" 2>/dev/null || :
 
-            log "$FUNCNAME to be depends" '$depends_fixed' "$depends_fixed"
+            log "$FUNCNAME to be" '$depends_fixed' "$depends_fixed"
             # Replace the existing depends file if one exists, otherwise this
             # just moves the file to its final resting place.
             mv -f "$depends_fixed" depends
@@ -3046,22 +3048,22 @@ init_dirs() {
 
     # Persistent cache directories.
     src_root=$cache_dir/sources
-    if [ -z "${KISS_SHARED_SRC+x}" ]; then
+    if [ -z "${KISS_SRC_ROOT+x}" ]; then
         [ -d "$src_root" ] || mkdir -p "$src_root"
-        KISS_SHARED_SRC="$(readlink -f "$src_root")"
+        KISS_SRC_ROOT="$(readlink -f "$src_root")"
     else
-        [ -d "$KISS_SHARED_SRC" ] || mkdir -p "$KISS_SHARED_SRC"
+        [ -d "$KISS_SRC_ROOT" ] || mkdir -p "$KISS_SRC_ROOT"
         if [ -L "$src_root" ]; then
-            [ "${KISS_SHARED_SRC}" = "$(readlink -f "$src_root")" ] ||
-            \ln -sf "${KISS_SHARED_SRC}" "$src_root"
+            [ "${KISS_SRC_ROOT}" = "$(readlink -f "$src_root")" ] ||
+            \ln -sf "${KISS_SRC_ROOT}" "$src_root"
         else
-            rsync -aqz "$src_root/*" "${KISS_SHARED_SRC}/"
+            rsync -aqz "$src_root/*" "${KISS_SRC_ROOT}/"
             \rm -rf "$src_root"
-            \ln -sf "${KISS_SHARED_SRC}" "$src_root"
+            \ln -sf "${KISS_SRC_ROOT}" "$src_root"
         fi
     fi
-    user_shared="$(stat -c '%U' "${KISS_SHARED_SRC}")"
-    src_root="${KISS_SHARED_SRC}"
+    user_shared="$(stat -c '%U' "${KISS_SRC_ROOT}")"
+    src_root="${KISS_SRC_ROOT}"
 
     # Top-level Temporary cache directory.
     proc="$cache_dir/proc"
@@ -3070,11 +3072,11 @@ init_dirs() {
     volatile="${KISS_TMPDIR}/proc"
     [ -d "$volatile" ] || mkdir -p "$volatile"
 
-    log "$FUNCNAME" '$KISS_SHARED_SRC' "$KISS_SHARED_SRC"
-    log "$FUNCNAME" '$user_shared'     "$user_shared"
-    log "$FUNCNAME" '${time}'          "${time}"
-    log "$FUNCNAME" '$sys_db'          "$sys_db"
-    log "$FUNCNAME" '$log_dir'         "$log_dir"
+    log "$FUNCNAME" '$KISS_SRC_ROOT' "$KISS_SRC_ROOT"
+    log "$FUNCNAME" '$user_shared'   "$user_shared"
+    log "$FUNCNAME" '${time}'        "${time}"
+    log "$FUNCNAME" '$sys_db'        "$sys_db"
+    log "$FUNCNAME" '$log_dir'       "$log_dir"
 }
 
 tmp_clear() {
@@ -3266,7 +3268,7 @@ args() {
         l|list)         pkg_list_version "$FUNCNAME" "$@" ;;
         p|pick)         pkg_pick_up "$1" "$2" ;;
         r|remove)       for pkg in $redro; do pkg_remove "$pkg"; done ;;
-        s|search)       for pkg do for item in $(delegate "pkg_find" "$pkg" all); do log "$pkg" "$item"; done; done ;;
+        s|search)       for pkg do for item in $(delegate "pkg_find" "$pkg" all -d); do log "$FUNCNAME" "$pkg" "$item"; done; done ;;
         u|update)       pkg_update ;;
         U|upgrade)      pkg_upgrade ;;
         v|version)      version_installed $1 ;;
