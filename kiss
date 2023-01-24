@@ -418,7 +418,7 @@ mkcd() {
             log "$FUNCNAME" '$parent_dir' "$parent_dir"
             local user="$(stat -c '%U' "$parent_dir")"
             log "$FUNCNAME" '$user' "$user"
-            [ "$parent_dir" = "/" ] || doas -u "$user" mkdir -p "$item" ||
+            [ "$parent_dir" = "/" ] || as_user "$user" mkdir -p "$item" ||
             log "$FUNCNAME" 'mkdir -p $item' 'trying to modify root partition /'
         done
         cd "$1"
@@ -663,7 +663,8 @@ pkg_version() {
     debug "$FUNCNAME" '$repo_ver' "$repo_ver"
     debug "$FUNCNAME" '$repo_rel' "$repo_rel"
 
-    printf '%s\3%s\3%s\3%s\3%s\n' "$repo_dir" "$ver_pre" "$rel_pre" "$repo_ver" "$repo_rel"
+    printf '%s\3%s\3%s\3%s\3%s\n' \
+        "$repo_dir" "$ver_pre" "$rel_pre" "$repo_ver" "$repo_rel"
 
 }
 
@@ -672,7 +673,8 @@ version_installed() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg
     if ok "$1"; then pkg="$1"; else pkg="kiss"; fi
-    IFS=$'\3' read -r _ _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg" "" "" "$sys_db")
+    IFS=$'\3' read -r _ _ _ repo_ver repo_rel \
+        < <(pkg_version "$FUNCNAME" "$pkg" "" "" "$sys_db")
     log "$FUNCNAME" '$repo_ver-$repo_rel' "$repo_ver-$repo_rel"
 }
 
@@ -692,14 +694,16 @@ pkg_version_split() {
     trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # https://stackoverflow.com/questions/2488715/idioms-for-returning-multiple-values-in-shell-scripting
-    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg" "$list" "$shell_flag" "$search_path")
+    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel \
+        < <(pkg_version "$FUNCNAME" "$pkg" "$list" "$shell_flag" "$search_path")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
     null "$repo_rel" && die "$FUNCNAME" '$repo_rel' "$repo_rel"
     debug "$FUNCNAME" '$repo_ver' "$repo_ver"
 
     # Split the version on '.+-_' to obtain individual components.
-    IFS=.+-_ read -r repo_major repo_minor repo_patch repo_ident < <(printf "$repo_ver\n")
+    IFS=.+-_ read -r repo_major repo_minor repo_patch repo_ident \
+        < <(printf "$repo_ver\n")
 
     [ $? -eq 0 ] && {
         debug "$FUNCNAME" '$repo_dir' "$repo_dir"
@@ -709,7 +713,8 @@ pkg_version_split() {
         # [ -z ${repo_ident} ] && repo_ident="0"
         debug "$FUNCNAME" '$repo_ident' "$repo_ident"
     }
-    printf '%s\3%s\3%s\3%s\3%s\3%s\3%s\n' "$repo_dir" "$repo_ver" "$repo_rel" "$repo_major" "$repo_minor" "$repo_patch" "$repo_ident"
+    printf '%s\3%s\3%s\3%s\3%s\3%s\3%s\n' \
+        "$repo_dir" "$repo_ver" "$repo_rel" "$repo_major" "$repo_minor" "$repo_patch" "$repo_ident"
 
 }
 
@@ -888,7 +893,8 @@ pkg_list_version() {
     for pkg_name do
         debug "$FUNCNAME" '$pkg_name'       "$pkg_name"
         debug "$FUNCNAME" '${pkg_name##*/}' "${pkg_name##*/}"
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db")
+        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+            < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db")
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
         log "$FUNCNAME" "$pkg_name $repo_ver-$repo_rel"
@@ -911,7 +917,8 @@ pkg_cache() {
     # Find the tarball of a package using a glob. Use the user's set compression
     # method if found or first match of the below glob.
 
-    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg")
+    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        < <(pkg_version "$FUNCNAME" "$pkg")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
 
@@ -952,7 +959,8 @@ pkg_cache() {
 # $3 dest                   : destination / source folder name (in sources file)
 # $4 action
 # How to use
-# IFS=$'\3' read -r _res _des < <(source_route "$pkg_name" "$src_url" "$dest" "$action") > /dev/null
+# IFS=$'\3' read -r _res _des \
+#     < <(source_route "$pkg_name" "$src_url" "$dest" "$action") > /dev/null
 # Output
 # _res  : source url
 # _des  : target file location, destination
@@ -970,10 +978,13 @@ source_route() {
         return 0
     }
 
-    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg_name")
+    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel \
+        < <(pkg_version "$FUNCNAME" "$pkg_name")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
-    IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident < <(pkg_version_split "$pkg_name")
+    IFS=$'\3' read -r repo_dir repo_ver repo_rel \
+        repo_major repo_minor repo_patch repo_ident \
+        < <(pkg_version_split "$pkg_name")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     [ -z "$ARCH+x" ] && die "$FUNCNAME" "\$ARCH must be defined" ||
     log "$FUNCNAME" '$ARCH' "$ARCH"
@@ -1015,7 +1026,7 @@ source_route() {
 
     #     *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
     #         log "$FUNCNAME" '$dest' "$dest"
-    #         # mkcd "$FUNCNAME" "$build_dir/${_des##*/}"
+    #         # mkcd "$FUNCNAME" "$make_dir/${_des##*/}"
     #         local head=${src_name%.t??*}
     #         local tail=${src_name##$head}
     #         src_current=$src_current-$repo_ver$tail
@@ -1029,24 +1040,25 @@ source_route() {
     # Git repository.
     if null "${src_url##git+*}"; then
         _res=$src_url
-        _des=$src_root/$pkg/src/${dest:-"$src_name"}
-        _des=${_des%[@#]*}/.
+        # _des=$src_dir/${dest:-"$src_name"}
+        # _des=${_des%[@#]*}/.
+        _des=$src_dir/${dest:+"$dest/"}.
 
     # How to judge the content under src's subfolder is valid?
     # # Remote source dir (cached).
-    # elif [ -d "$src_root/$pkg/src/${dest:+"$dest/"}$src_current" ]; then
-    #     _res=$src_root/$pkg/src/${dest:+"$dest/"}$src_current
-    #     _des=$src_root/$pkg/src/${dest:+"$dest/"}$src_current
+    # elif [ -d "$src_dir/${dest:+"$dest/"}$src_current" ]; then
+    #     _res=$src_dir/${dest:+"$dest/"}$src_current
+    #     _des=$src_dir/${dest:+"$dest/"}$src_current
 
     # Remote source files (cached).
-    elif [ -f "$src_root/$pkg/archive/${dest:+"$dest/"}$src_name" ]; then
-        _res=$src_root/$pkg/archive/${dest:+"$dest/"}$src_name
-        _des=$src_root/$pkg/src/${dest:+"$dest/"}.
+    elif [ -f "$archive_dir/${dest:+"$dest/"}$src_name" ]; then
+        _res=$archive_dir/${dest:+"$dest/"}$src_name
+        _des=$src_dir/${dest:+"$dest/"}.
 
     # Remote source archive/files.
     elif null "${src_url##*://*}"; then
         _res=url+$src_url
-        _des=$src_root/$pkg/archive/${dest:+"$dest/"}$src_name
+        _des=$archive_dir/${dest:+"$dest/"}$src_name
 
     # Local relative dir.
     elif [ -d "$repo_dir/$src_url" ]; then
@@ -1087,8 +1099,8 @@ pkg_download() {
     log "$FUNCNAME" '$pkg_name' "$pkg_name"
     log "$FUNCNAME" '$action'   "$action"
     IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
-    < <(pkg_version_split "$pkg_name") > /dev/null ||
-    die "$FUNCNAME" 'pkg_version_split' "failed on $LINENO"
+        < <(pkg_version_split "$pkg_name") > /dev/null ||
+        die "$FUNCNAME" 'pkg_version_split' "failed on $LINENO"
     [ "$?" -ne 0 ] || {
         log "$FUNCNAME" '$repo_dir'   "$repo_dir"
         log "$FUNCNAME" '$repo_major' "$repo_major"
@@ -1106,8 +1118,9 @@ pkg_download() {
         ok "${src_url%%\#*}" || continue
         log "$FUNCNAME" '$src_url'  "$src_url"
         log "$FUNCNAME" '$dest' "$dest"
-        IFS=$'\3' read -r _res _des < <(source_route "$pkg_name" "$src_url" "$dest" "$action") > /dev/null ||
-        die "$FUNCNAME" "source_route" "failed on $LINENO"
+        IFS=$'\3' read -r _res _des \
+            < <(source_route "$pkg_name" "$src_url" "$dest" "$action") > /dev/null ||
+            die "$FUNCNAME" "source_route" "failed on $LINENO"
         log "$FUNCNAME" '$_res' "$_res"
         log "$FUNCNAME" '$_des' "$_des"
 
@@ -1201,6 +1214,7 @@ download_git() {
 # $2 repo_name
 # $3 $_des
 # $4 $_res
+# working under "${_des%/*}"
 extract_tar() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local user_shared="$1"
@@ -1269,7 +1283,7 @@ extract_tar() {
 }
 
 # $1 pkg_name
-pkg_extract() {
+pkg_to_make_dir() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg_name="$1"
     # Extract all source archives to the build directory and copy over any
@@ -1284,32 +1298,31 @@ pkg_extract() {
     run_hook "$user_shared" pre-extract "$pkg" "$pkg_dir"
 
     while read -r src_url dest || ok "${src_url%%\#*}"; do
-        IFS=$'\3' read -r _res _des < <(source_route "$pkg_name" "$src_url" "$dest") > /dev/null ||
-        die "$FUNCNAME" "source_route" "failed on $LINENO"
+        IFS=$'\3' read -r _res _des \
+            < <(source_route "$pkg_name" "$src_url" "$dest") > /dev/null ||
+            die "$FUNCNAME" "source_route" "failed on $LINENO"
 
         # Create the source's directories if not null.
-        null "$_res" || {
+        null "$_res" ||
 
-            case $_res in
-                git+*)
-                    mkcd "$FUNCNAME" "$build_dir/$dest"
-                    rsync -aqz "$_des/." .
-                ;;
+        case $_res in
+            git+*)
+                mkcd "$FUNCNAME" "$make_dir/$dest"
+                rsync -aqz "$_des/." .
+            ;;
 
-                *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
-                    log "$FUNCNAME" '$dest' "$dest"
-                    extract_tar "$user_shared" "$pkg_name" "$_des" "$_res"
-                    # mkcd "$FUNCNAME" "$build_dir/${_des##*/}"
-                    mkcd "$FUNCNAME" "$build_dir/$dest"
-                    rsync -aqz "$_des/." .
-                ;;
+            *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
+                extract_tar "$user_shared" "$pkg_name" "$_des" "$_res"
+                # mkcd "$FUNCNAME" "$make_dir/${_des##*/}"
+                mkcd "$FUNCNAME" "$make_dir/$dest"
+                rsync -aqz "$_des/." .
+            ;;
 
-                *?*)
-                    mkcd "$FUNCNAME" "$build_dir/$dest"
-                    cp -LRf "$_res" .
-                ;;
-            esac
-        }
+            *?*)
+                mkcd "$FUNCNAME" "$make_dir/$dest"
+                cp -LRf "$_res" .
+            ;;
+        esac
     done < "$repo_dir/sources" || die "$FUNCNAME" "$pkg_name" "Failed to extract $_res"
 }
 
@@ -1459,7 +1472,7 @@ pkg_strip() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # Strip package binaries and libraries. This saves space on the system as
     # well as on the tarballs we ship for installation.
-    [ -f "$build_dir/nostrip" ] || equ "$KISS_STRIP" 0 && return
+    [ -f "$make_dir/nostrip" ] || equ "$KISS_STRIP" 0 && return
 
     log "$FUNCNAME" "$1" "Stripping binaries and libraries"
 
@@ -1753,7 +1766,8 @@ pkg_tar() {
     log "$FUNCNAME" '$pkg' "$pkg tarball creating"
     # tree "$pkg_dir"
 
-    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "$pkg")
+    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        < <(pkg_version "$FUNCNAME" "$pkg")
     null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
     local tar_file=$bin_dir/$pkg@$repo_ver-$repo_rel.tar.$KISS_COMPRESS
@@ -1874,7 +1888,8 @@ pkg_build_all() {
         log "$FUNCNAME" "$pkg" "Building package ($((_build_cur+=1))/$#)"
 
         log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
-        IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident < <(pkg_version_split "$pkg")
+        IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
+            < <(pkg_version_split "$pkg")
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
 
         # arg1: queue-status
@@ -1885,7 +1900,7 @@ pkg_build_all() {
 
         log "$FUNCNAME" '$repo_dir' "$repo_dir [local]"
         null "$repo_dir" && die "$FUNCNAME" '' "\$repo_dir not found [local]"
-        [ ! -f "$repo_dir/sources" ] || pkg_extract "$pkg"
+        [ ! -f "$repo_dir/sources" ] || pkg_to_make_dir "$pkg"
 
         log "$FUNCNAME" '$db'  "$db"
         log "$FUNCNAME" '$PWD' "$PWD"
@@ -1921,13 +1936,13 @@ pkg_build() {
     # Install built packages to a directory under the package name to
     # avoid collisions with other packages.
 
-    log "$FUNCNAME" '$pkg_root'  "$pkg_root"
-    log "$FUNCNAME" '$build_dir' "$build_dir"
-    log "$FUNCNAME" '$pkg_dir'   "$pkg_dir"
-    log "$FUNCNAME" '$bin_dir'   "$bin_dir"
-    log "$FUNCNAME" '$log_dir'   "$log_dir"
-    log "$FUNCNAME" '$repo_ver'  "$repo_ver"
-    log "$FUNCNAME" '$repo_dir'  "$repo_dir [global]"
+    log "$FUNCNAME" '$pkg_root' "$pkg_root"
+    log "$FUNCNAME" '$make_dir' "$make_dir"
+    log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"
+    log "$FUNCNAME" '$bin_dir'  "$bin_dir"
+    log "$FUNCNAME" '$log_dir'  "$log_dir"
+    log "$FUNCNAME" '$repo_ver' "$repo_ver"
+    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
 
     local repo_dir="$(delegate "pkg_find" "$pkg")"
 
@@ -1939,14 +1954,14 @@ pkg_build() {
     log "$FUNCNAME" '$user' "$user"
     log "$FUNCNAME" '$pkg_dir/$db' "$pkg_dir/$db"
 
-    mkcd "$FUNCNAME" "$build_dir" "$pkg_dir/$db"
+    mkcd "$FUNCNAME" "$make_dir" "$pkg_dir/$db"
 
     log "$FUNCNAME" "$pkg" "Starting build"
 
     # arg1: pre-build
     # arg2: package name
     # arg3: path to build directory
-    run_hook "$user_shared" pre-build "$pkg" "$build_dir"
+    run_hook "$user_shared" pre-build "$pkg" "$make_dir"
 
     # # Attempt to create the log file early so any permissions errors are caught
     # # before the build starts. 'tee' is run in a pipe and POSIX shell has no
@@ -1987,6 +2002,8 @@ pkg_build() {
         KISS_TMPDIR="$KISS_TMPDIR" \
         REPO_MAIN="$REPO_MAIN" \
         KISS_ROOT="$KISS_ROOT" \
+        SRC_PATH="$src_dir" \
+        MAKE_PATH="$make_dir" \
         \
         "$repo_dir/build" "$pkg_dir" "$repo_ver" 2>&1 || {
             log "$FUNCNAME" "$pkg" "Build failed"
@@ -1995,7 +2012,7 @@ pkg_build() {
             # arg1: build-fail
             # arg2: package name
             # arg3: path to build directory
-            (run_hook "$user_shared" build-fail "$pkg" "$build_dir") || :
+            (run_hook "$user_shared" build-fail "$pkg" "$make_dir") || :
 
             # pkg_clean
             kill 0
@@ -2046,8 +2063,9 @@ pkg_checksum_gen() {
     #
     # NOTE: repo_ comes from caller.
     while read -r src_url dest || ok "${src_url%%\#*}"; do
-        IFS=$'\3' read -r _res _des < <(source_route "$repo_name" "$src_url" "$dest") > /dev/null ||
-        die "$FUNCNAME" "source_route" "failed on $LINENO"
+        IFS=$'\3' read -r _res _des \
+            < <(source_route "$repo_name" "$src_url" "$dest") > /dev/null ||
+            die "$FUNCNAME" "source_route" "failed on $LINENO"
 
         case ${_res##git+*} in */*[!.])
             set -- "$@" "$_res"
@@ -2677,7 +2695,8 @@ pkg_install() {
 
         local repo_dir="$(delegate "pkg_find" "$pkg_name" "" "-d" "$KISS_PATH")"
         log "$FUNCNAME" '$repo_dir' "$repo_dir"
-        # IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$pkg_dir/$db")
+        # IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        #     < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$pkg_dir/$db")
         IFS=$' ' read -r repo_ver repo_rel < <(cat "$repo_dir/version")
         local repo_ver_rel="$repo_ver-$repo_rel"
         log "$FUNCNAME" '$repo_ver_rel' "$repo_ver_rel"
@@ -2844,10 +2863,12 @@ pkg_upgrade() {
 
     for pkg in "$sys_db/"*; do set -f
         tmp_dirs "$pkg" "reset";
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "${pkg##*/}" "" "" "$sys_db")
+        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+            < <(pkg_version "$FUNCNAME" "${pkg##*/}" "" "" "$sys_db")
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel < <(pkg_version "$FUNCNAME" "${pkg##*/}")
+        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+            < <(pkg_version "$FUNCNAME" "${pkg##*/}")
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
 
@@ -3069,6 +3090,8 @@ init_dirs() {
     proc="$cache_dir/proc"
     proc=${proc%"${proc##*[!/]}"}
     [ -d "$proc" ] || mkdir -p "$proc"
+    archive_root="$cache_dir/archive"
+    [ -d "$archive_root" ] || mkdir -p "$proc"
     volatile="${KISS_TMPDIR}/proc"
     [ -d "$volatile" ] || mkdir -p "$volatile"
 
@@ -3081,12 +3104,12 @@ init_dirs() {
 
 tmp_clear() {
     local pkg="$1"
-    [ "$build_dir" = "/build" ]  || find "$build_dir" -mindepth 1 -delete;
-    [ "$tmp_dir" = "/tmp" ]      || find "$tmp_dir"   -mindepth 1 -delete;
-    [ "$pkg_dir" = "/pkg" ]      || find "$pkg_dir"   -mindepth 1 -delete;
-    [ "$tar_dir" = "/extract" ]  || find "$tar_dir"   -mindepth 1 -delete;
-    [ "$bin_dir" = "/bin" ]      || find "$bin_dir"   -mindepth 1 -delete;
-    [ "$src_dir" = "/$pkg/src" ] || find "$src_dir"   -mindepth 1 -delete;
+    [ "$make_dir" = "/make" ]   || find "$make_dir" -mindepth 1 -delete;
+    [ "$tmp_dir" = "/tmp" ]     || find "$tmp_dir"  -mindepth 1 -delete;
+    [ "$pkg_dir" = "/pkg" ]     || find "$pkg_dir"  -mindepth 1 -delete;
+    [ "$tar_dir" = "/extract" ] || find "$tar_dir"  -mindepth 1 -delete;
+    [ "$bin_dir" = "/bin" ]     || find "$bin_dir"  -mindepth 1 -delete;
+    # [ "$src_dir" = "/$pkg" ]    || find "$src_dir"  -mindepth 1 -delete;
     # [ ! -d "${KISS_TMPDIR}/proc" ] ||
     # for item in $(\ls -x "${KISS_TMPDIR}/proc"); do [ "$item" = "$pkg" ] || \rm -rf "${KISS_TMPDIR}/proc/$item"; done
 }
@@ -3104,15 +3127,15 @@ tmp_dirs() {
     [ -d "$pkg_volatile" ] || mkdir -p $pkg_volatile
 
     # Temporary cache directories.
-    build_dir="$pkg_volatile/build"
+    make_dir="$pkg_volatile/make"
     tmp_dir="$pkg_volatile/tmp"
     log_dir="$pkg_root/logs"
     pkg_dir="$pkg_root/pkg"
     tar_dir="$pkg_root/extract"
     bin_dir="$pkg_root/bin"
 
-    src_dir="$src_root/$pkg/src"
-    archive_dir="$src_root/$pkg/archive"
+    src_dir="$src_root/$pkg"
+    archive_dir="$archive_root/$pkg"
 
     # set +e will bypass the following exit
     # [ -d "${pkg_root}" ] && equ "reset" "$2" && \rm -rf "$pkg_root"
@@ -3120,7 +3143,7 @@ tmp_dirs() {
     # [ $? -ne 0 ] && log "$FUNCNAME" "" "[] error occurred"
 
     mkdir -p "$log_dir" "$bin_dir" \
-        "$build_dir" "$pkg_dir" "$tar_dir" "$tmp_dir" "$src_dir" "$archive_dir"
+        "$make_dir" "$pkg_dir" "$tar_dir" "$tmp_dir" "$src_dir" "$archive_dir"
 
     [ ! -d "${pkg_root}" ] || ! equ "reset" "$2" || tmp_clear "$pkg"
 
@@ -3129,12 +3152,12 @@ tmp_dirs() {
 
     log "$FUNCNAME" '$log_dir_original' "$log_dir_original"
 
-    log "$FUNCNAME" '$build_dir' "$build_dir"
-    log "$FUNCNAME" '$tmp_dir'   "$tmp_dir"
-    log "$FUNCNAME" '$log_dir'   "$log_dir"
-    log "$FUNCNAME" '$pkg_dir'   "$pkg_dir"
-    log "$FUNCNAME" '$tar_dir'   "$tar_dir"
-    log "$FUNCNAME" '$bin_dir'   "$bin_dir"
+    log "$FUNCNAME" '$make_dir' "$make_dir"
+    log "$FUNCNAME" '$tmp_dir'  "$tmp_dir"
+    log "$FUNCNAME" '$log_dir'  "$log_dir"
+    log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"
+    log "$FUNCNAME" '$tar_dir'  "$tar_dir"
+    log "$FUNCNAME" '$bin_dir'  "$bin_dir"
 
     # printf "%s" "$pkg_root"
 }
