@@ -415,11 +415,12 @@ mkcd() {
             item="$(standardize "$item")"
             local parent_dir="${item%/*}"
             while [ ! -d "$parent_dir" ]; do parent_dir="${parent_dir%/*}"; done
+            [ "$parent_dir" != "" ] ||
+            die "$FUNCNAME" 'mkdir -p $item' 'trying to modify root partition /'
             log "$FUNCNAME" '$parent_dir' "$parent_dir"
             local user="$(stat -c '%U' "$parent_dir")"
             log "$FUNCNAME" '$user' "$user"
-            [ "$parent_dir" = "/" ] || as_user "$user" mkdir -p "$item" ||
-            log "$FUNCNAME" 'mkdir -p $item' 'trying to modify root partition /'
+            as_user "$user" mkdir -p "$item"
         done
         cd "$1"
         log "$FUNCNAME" '$PWD' "$PWD"
@@ -2637,7 +2638,7 @@ pkg_install() {
     # Block being able to abort the script with Ctrl+C during installation.
     # Removes all risk of the user aborting a package installation leaving
     # an incomplete package installed.
-    trap '' INT
+    trap_off    # trap '' INT
 
     if [ ! -s "$sys_db/$pkg_name/etcsums" ]; then
         # Install the package's files by iterating over its manifest.
@@ -2675,7 +2676,7 @@ pkg_install() {
     then
         # Reset 'trap' to its original value. Installation is done so we no longer
         # need to block 'Ctrl+C'.
-        # trap pkg_clean EXIT INT
+        trap_on # trap pkg_clean EXIT INT
 
         # arg1: post-install
         # arg2: package name
@@ -3521,10 +3522,12 @@ main() {
     # Catch errors and ensure that build files and directories are cleaned
     # up before we die. This occurs on 'Ctrl+C' as well as success and error.
     # trap pkg_clean EXIT INT
-    trap_off
-    # trap_on
+    # trap_off
+    trap_on
 
     args "$@"
+
+    trap_off
 
     log_permanent
 }
