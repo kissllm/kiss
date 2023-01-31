@@ -1051,7 +1051,7 @@ source_route() {
     # local src_current="${src_name%%-"$repo_ver"*}"
     # src_current="${src_current%%"$repo_ver"*}"
     # src_current="${src_current%%[@\#]*}"
-    # [ ! -z "$src_current" ] || {
+    # [ -n "$src_current" ] || {
     #     src_current="$pkg"
     # }
     # local _des_name=$src_current
@@ -1299,17 +1299,18 @@ download_git() {
             log "$FUNCNAME" 'fetch' "${url}"
             $@ git fetch --depth 1 "${url}" $target 2>/dev/null ||
             $@ git fetch "${url}" $target ||
-            # $@ git fetch --depth 1 origin $target
             die "$FUNCNAME" "git fetch --depth 1 \"${url}\" $target" "failed at $LINENO"
+            # generate branch "$terget" in .git/config
+            $@ git fetch --depth 1 origin $target
 
             local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
             [ "$target" = "$target_ref" ] || {
                 # fatal: a branch named 'master' already exists when "$target" = "$target_ref"
-                $@ git branch $target FETCH_HEAD 2>/dev/null ||
-                $@ git checkout -b $target --track origin/$target ||
+                $@ git branch $target FETCH_HEAD 2>/dev/null ||         # fatal: a branch named 'master' already exists
+                $@ git checkout -b $target --track origin/$target ||    # fatal: 'origin/aster' is not a commit and a branch 'master' cannot be created from it
                 die "$FUNCNAME" "git checkout -b $target --track origin/$target" "failed at $LINENO"
 
-                $@ git switch $target 2>/dev/null || $@ git switch -c $target ||
+                $@ git switch $target 2>/dev/null || $@ git switch -c $target ||    # Already on 'master'
                 die "$FUNCNAME" "git switch $target" "failed at $LINENO"
 
                 target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
@@ -1320,6 +1321,7 @@ download_git() {
             [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
 
             $@ git branch --set-upstream-to=origin/$target $target
+            # fatal: the requested upstream branch 'origin/master' does not exist
             $@ git reset --hard origin/$target ||
                 die "$FUNCNAME" "git reset --hard origin/$target" "failed at $LINENO"
 
@@ -1330,7 +1332,7 @@ download_git() {
             # $@ git fetch --all --tags
             $@ git fetch --depth 1 "${url}" tag $target --no-tags 2>/dev/null ||
             $@ git fetch --depth 1 "${url}" refs/tags/$target:refs/tags/$target 2>/dev/null ||
-            git fetch "${url}" tag $target --no-tags ||
+            $@ git fetch "${url}" tag $target --no-tags ||
                 die "$FUNCNAME" "git fetch \"${url}\" tag $target --no-tags" "failed at $LINENO"
 
             local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
@@ -1348,7 +1350,6 @@ download_git() {
             $@ git reset --hard tags/$target ||
             die "$FUNCNAME" "git reset --hard tags/$target" "failed at $LINENO"
         fi
-
 
         $@ git rev-parse --short HEAD
         $@ git describe --always
@@ -1541,7 +1542,7 @@ pkg_depends() {
 
         null ${dep##*/*} ||
         contains "$appended" "$pkg" || {
-            { ok "${dep##\#*}" && [ ! -z ${KISS_ROOT:+x} ]; } ||
+            { ok "${dep##\#*}" && [ -n ${KISS_ROOT:+x} ]; } ||
                 pkg_depends "$dep" '' "$filter" "$4 $pkg" "$dep_type"
             { [ -z ${KISS_ROOT:+x} ] || ok "$dep_type"; } ||
                 pkg_depends "$dep" '' "$filter" "$4 $pkg" "$dep_type"
@@ -2885,7 +2886,7 @@ pkg_install() {
                     }
                     matched_name=1
                 done
-                if [ "$matched_name" -eq 0 ] && [ ! -z "${REPO_MAIN+x}" ]; then
+                if [ "$matched_name" -eq 0 ] && [ -n "${REPO_MAIN+x}" ]; then
                     [ ! -d "$REPO_MAIN" ] || {
                         log "$FUNCNAME backup" "$pkg_name" "$REPO_MAIN/extra/$pkg_name"
                         rsync -aqz "$sys_db/$pkg_name" "$REPO_MAIN/extra/"
@@ -3177,14 +3178,14 @@ init_dirs() {
     local ppwd="$1"
 
     local uid="$(id -u)"
-    [ ! -z "${KISS_TMPDIR+x}" ] || KISS_TMPDIR="/tmp$HOME/kiss"
+    [ -n "${KISS_TMPDIR+x}" ] || KISS_TMPDIR="/tmp$HOME/kiss"
     log_dir_original="${KISS_TMPDIR}/logs"
     [ -d "$log_dir_original" ] || mkdir -p "$log_dir_original"
 
     # cd "${KISS_TMPDIR}/$uid"
     # list="$(ls -x ${KISS_TMPDIR}/$uid)"
     # for dir in $list; do
-    #     [ "$dir" != "${PPID}" ] && [ "$(expr substr $dir 1 1)" != '/' ] && \rm -rf "$dir";
+    #     [ "$dir" = "${PPID}" ] || [ "$(expr substr $dir 1 1)" = '/' ] || \rm -rf "$dir";
     # done
     # cd $ppwd
 
@@ -3194,13 +3195,14 @@ init_dirs() {
 
     # Root directory standardization
     KISS_ROOT=${KISS_ROOT%"${KISS_ROOT##*[!/]}"}
-    [ ! -z "${REPO_MAIN+x}" ] || [ "$action" != "i" ] || [ "$action" != "install" ] || die "$FUNCNAME" '$REPO_MAIN' "for reverse copying sys_db/repo to the main repo"
+    [ -n "${REPO_MAIN:+x}" ] || [ "$action" != "i" ] || [ "$action" != "install" ] ||
+    die "$FUNCNAME" '$REPO_MAIN' "for reverse copying sys_db/repo to the main repo"
     # This allows for automatic setup of a KISS chroot and will
     # do nothing on a normal system.
     mkdir -p "$KISS_ROOT/" 2>/dev/null || :
 
     # System package database.
-    [ ! -z "${REPO_ROOT+x}" ] || REPO_ROOT="/var/db/kiss"
+    [ -n "${REPO_ROOT:+x}" ] || REPO_ROOT="/var/db/kiss"
     [ -d "$REPO_ROOT" ] || die "$FUNCNAME" '$REPO_ROOT' "does not exist"
     sys_db=$KISS_ROOT/${db:="${REPO_ROOT#*/}/installed"}
     sys_ch=$KISS_ROOT/${cho_db:="${REPO_ROOT#*/}/choices"}
@@ -3605,7 +3607,7 @@ cross_flags() {
     export PKG_CONFIG_SYSROOT_DIR=${KISS_ROOT}
 
     # Don't carry over flags if this is a cross build
-    if [ ! -z ${KISS_ROOT:+x} ]; then
+    if [ -n ${KISS_ROOT:+x} ]; then
         unset CFLAGS
         unset CXXFLAGS
         unset LDFLAGS
