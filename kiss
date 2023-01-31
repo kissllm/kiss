@@ -411,18 +411,21 @@ mkcd() {
         die "$FUNCNAME" "can not create empty directories"
     else
         log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-        for item in $@; do
+        local list="$@"
+        local target="$1"
+        for item in $list; do
             item="$(standardize "$item")"
             local parent_dir="${item%/*}"
             while [ ! -d "$parent_dir" ]; do parent_dir="${parent_dir%/*}"; done
             [ "$parent_dir" != "" ] ||
-            die "$FUNCNAME" 'mkdir -p $item' 'trying to modify root partition /'
+            die "$FUNCNAME" 'mkdir -p $item' 'trying to modify $KISS_ROOT/'
             log "$FUNCNAME" '$parent_dir' "$parent_dir"
             local user="$(stat -c '%U' "$parent_dir")"
             log "$FUNCNAME" '$user' "$user"
-            as_user "$user" mkdir -p "$item"
+            set -- $(delegate as_user "$user")
+            $@ mkdir -p "$item"
         done
-        cd "$1"
+        cd "$target"
         log "$FUNCNAME" '$PWD' "$PWD"
     fi
 }
@@ -453,29 +456,61 @@ replace() {
 
 # $1 path
 am_owner() {
+    local path="$1"
+    # local user_key=$2
+    # local group_key=$3
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+
     # Figure out if we need to change users to operate on
     # a given file or directory.
-    local inf="$(\ls -ld "$1")" ||
-        die "$FUNCNAME" "Failed to file information for '$1'"
 
-    debug "$FUNCNAME" '$inf' "$inf"
-    # Split the ls output into fields.
-    read -r _ _ user _ < <(printf "$inf\n")
+    # local inf="$(\ls -ld "$path")" ||
+    #     die "$FUNCNAME" "Failed to file information for '$1'"
+
+    # debug "$FUNCNAME" '$inf' "$inf"
+    # # Split the ls output into fields.
+    # read -r _ _ user _ < <(printf "$inf\n")
+
+    local user=$(stat -c '%U' "${path}")
     log "$FUNCNAME" '$user' "$user"
-    equ "$LOGNAME/$user" "$user/$LOGNAME"
+
+    # [ -z "$user_key" ] || eval "$user_key=$user"
+    # log "$FUNCNAME" '$user_key' "$user_key"
+    # log "$FUNCNAME" '$(eval echo \$$user_key)' "$(eval echo \$$user_key)"
+
+    local group=$(stat -c '%G' "${path}")
+    log "$FUNCNAME" '$group' "$group"
+    # [ -z "$group_key" ] || eval "$group_key=$group"
+    # log "$FUNCNAME" '$group_key' "$group_key"
+    # log "$FUNCNAME" '$(eval echo \$$group_key)' "$(eval echo \$$group_key)"
+
+    # equ "$LOGNAME/$user" "$user/$LOGNAME"
+
+    printf '%s\3%s\n' "$user" "$group"
+}
+
+as() {
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local user_name="$1"
+    log "$FUNCNAME" "Using '$cmd_su' (to become $user_name)"
+    shift 1
+
+    case ${cmd_su##*/} in
+        su) $cmd_su -c $* <&3 $user_name 3<&0 </dev/tty ;;
+         *) $cmd_su -u $user_name -- $@
+    esac
 }
 
 # $1 user_name
 as_user() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local user_name="$1"
-    printf 'Using '%s' (to become %s)\n' "$cmd_su" "$user_name"
+    log "$FUNCNAME" "Using '$cmd_su' (to become $user_name)"
     shift 1
 
     case ${cmd_su##*/} in
-        su) "$cmd_su" -c "$* <&3" "$user_name" 3<&0 </dev/tty ;;
-         *) "$cmd_su" -u "$user_name" -- "$@"
+        su) printf '\n%s' "$cmd_su -c $* <&3 $user_name 3<&0 </dev/tty" ;;
+         *) printf '\n%s' "$cmd_su -u $user_name -- $@"
     esac
 }
 
@@ -512,15 +547,14 @@ resolve_path() {
 
 run_hook() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local user_shared="$1"
-    local command="$2"
+    local command="$1"
     # Run all hooks in KISS_HOOK (a colon separated
     # list of absolute file paths).
     ORG_IFS=$IFS
     IFS=:
 
     for hook in ${KISS_HOOK:-}; do case $hook in *?*)
-        as_user "$user_shared" "$hook" "$@" || die "$FUNCNAME" "$command" "hook failed: '$hook'"
+        "$hook" "$@" || die "$FUNCNAME" "$command" "hook failed: '$hook'"
     esac done
 
     unset IFS
@@ -531,14 +565,13 @@ run_hook() {
 # $2 pkg_name
 run_hook_pkg() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local user_shared="$1"
-    local command="$2"
-    local pkg_name="$3"
+    local command="$1"
+    local pkg_name="$2"
 
     # Run a hook from the package's database files.
     if [ -x "$sys_db/$pkg_name/$command" ]; then
         log "$FUNCNAME" "$pkg_name" "Running $command hook"
-        as_user "$user_shared" "$sys_db/$pkg_name/$command"
+        "$sys_db/$pkg_name/$command"
 
     elif [ -f "$sys_db/$pkg_name/$command" ]; then
         war "$FUNCNAME" "$pkg_name" "skipping $command hook: not executable"
@@ -767,9 +800,9 @@ pkg_pick_up() {
         local dir="$(dirname "$selected")"
         local pkg_name="$(basename "$selected")"
         export KISS_PATH=$dir
-        pkg_checksum  "$pkg_name" 2>&1 > /dev/stderr &&
-        pkg_build_all "$pkg_name" 2>&1 > /dev/stderr &&
-        pkg_install   "$pkg_name" 2>&1 > /dev/stderr
+        { action=c; pkg_checksum  "$pkg_name" 2>&1 > /dev/stderr; } &&
+        { action=b; pkg_build_all "$pkg_name" 2>&1 > /dev/stderr; } &&
+        { action=i; pkg_install   "$pkg_name" 2>&1 > /dev/stderr; }
     }
 }
 
@@ -895,10 +928,11 @@ pkg_list_version() {
         debug "$FUNCNAME" '$pkg_name'       "$pkg_name"
         debug "$FUNCNAME" '${pkg_name##*/}' "${pkg_name##*/}"
         IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
-            < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db")
+            < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db") \
+            > /dev/null || die "$FUNCNAME" '$pkg_version' "failed on $LINENO"
         null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
-        log "$FUNCNAME" "$pkg_name $repo_ver-$repo_rel"
+        log "$FUNCNAME" "${pkg_name##*/}" "$repo_ver-$repo_rel"
     done
 }
 
@@ -1027,7 +1061,7 @@ source_route() {
 
     #     *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
     #         log "$FUNCNAME" '$dest' "$dest"
-    #         # mkcd "$FUNCNAME" "$make_dir/${_des##*/}"
+    #         # mkcd "$FUNCNAME" "$mak_dir/${_des##*/}"
     #         local head=${src_name%.t??*}
     #         local tail=${src_name##$head}
     #         src_current=$src_current-$repo_ver$tail
@@ -1129,36 +1163,35 @@ pkg_download() {
         # arg2: package name
         # arg3: verbatim source
         # arg4: resolved source
-        run_hook "$user_shared" pre-source "$pkg_name" "$src_url" "$_fnr"
+        run_hook pre-source "$pkg_name" "$src_url" "$_fnr"
 
         # '$2' is set when this function is called from 'kiss c' and it is used
         # here to skip calling the Git code.
-        log "$FUNCNAME" 'valid $_res' "${_res##"${_res%%+*}+"}"
+        log "$FUNCNAME" 'purified $_res' "${_res##"${_res%%+*}+"}"
         case ${action}$_res in "${action}url+"*|git+*)
             # For download_url and download_git
-            "download_${_res%%+*}" "$user_shared" "$pkg_name" "$_des" "${_res##"${_res%%+*}+"}"
+            "download_${_res%%+*}" "$pkg_name" "$_des" "${_res##"${_res%%+*}+"}"
         esac
 
         # arg1: post-source
         # arg2: package name
         # arg3: verbatim source
         # arg4: resolved source
-        run_hook "$user_shared" post-source "$pkg_name" "$src_url" "${_des:-"$_res"}"
+        run_hook post-source "$pkg_name" "$src_url" "${_des:-"$_res"}"
     done < "$repo_dir/sources"
 }
 
 download_url() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local user_shared="$1"
-    local repo_name="$2"
-    shift 2
+    local repo_name="$1"
+    shift 1
     local _des="$1"
-    local _res="$2"
+    local _purified_res="$2"
 
     log "$FUNCNAME" '$_des' "$_des"
     mkcd "$FUNCNAME" "${_des%/*}"
 
-    log "$FUNCNAME" "$repo_name" "Downloading $_res"
+    log "$FUNCNAME" "$repo_name" "$_purified_res"
     log "$FUNCNAME" '${cmd_get##*/}' "${cmd_get##*/}"
     # Set the arguments based on found download utility.
     case ${cmd_get##*/} in
@@ -1167,60 +1200,178 @@ download_url() {
          wget|wget2) set -- -O   "$@" ;;
     esac
 
-    "$cmd_get" "$@" || {
-        rm -f "$_res"
-        die "$FUNCNAME" "$repo_name" "Failed to download $_res"
+    # Opening output file $_des
+    # Error opening local file
+    # /usr/bin/kiss: line 1198: -o: not found
+    local archive_user=
+    IFS=$'\3' read -r archive_dir_user _  \
+        < <(am_owner "$archive_dir") > /dev/null ||
+        die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+    equ "$LOGNAME" "$archive_dir_user" || archive_user=$(delegate as_user "$archive_dir_user")
+
+    log "$FUNCNAME" '$LOGNAME' "$LOGNAME"
+    log "$FUNCNAME" '$archive_user' "$archive_user"
+
+    $archive_user "$cmd_get" "$@" || {
+        $archive_user rm -f "$_des"
+        die "$FUNCNAME" "$repo_name" "Failed to download $_purified_res"
     }
 }
 
 download_git() {
+    set -eE
+    trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local user_shared="$1"
-    local repo_name="$2"
-    shift 2
+    local repo_name="$1"
+    shift 1
     local _des="$1"
-    local _res="$2"
+    local _purified_res="$2"
 
+    log "$FUNCNAME" '$src_root'      "$src_root"
+    log "$FUNCNAME" '$src_root_user' "$src_root_user"
+
+    IFS=$'\3' read -r  src_root_user _  \
+        < <(am_owner "$src_root") > /dev/null ||
+        die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+    equ "$LOGNAME" "$src_root_user" || set -- $(delegate as_user "$src_root_user")
+
+    log "$FUNCNAME" '$_des' "$_des" # "$src_dir/${dest:+"$dest/"}."
+    # Remove "/."
+    [ "${_des##*/}" != "." ] || _des="${_des%/*}"
     log "$FUNCNAME" '$_des' "$_des"
-    mkcd "$FUNCNAME" "${_des%/*}"
+    mkcd "$FUNCNAME" "$_des"
 
-    local branch=${_res##*[@#]}
-    branch=${branch#${_res%[#@]*}}
+    local upstream_name=${_purified_res##*[@#]}
 
-    log "$FUNCNAME" "$repo_name" "Checking out ${branch:-FETCH_HEAD}"
+    url="${_purified_res%[#@]*}"
 
-    [ -d .git ] || git init
+    log "$FUNCNAME" '$upstream_name' "$upstream_name"
+    log "$FUNCNAME" '$url' "${url}"
+    log "$FUNCNAME" '$PWD' "$PWD"
 
-    url="${_res%[#@]*}"
-    git remote set-url origin "${url}" 2>/dev/null ||
-        git remote add origin "${url}"
+    local target=$($@ git ls-remote $url --heads origin "refs/heads/$upstream_name" | awk '{print $2}')
+    local upstream_type
 
-    log "$FUNCNAME" '$branch' "$branch"
-    log "$FUNCNAME" '$url'    "${url}"
-    log "$FUNCNAME" '$PWD'    "$PWD"
+    if [ -n "$target" ]; then
+        target="${target##*/}"
+        upstream_type="branch"
+    else
+        target=$($@ git ls-remote $url --tags origin "refs/tags/$upstream_name" | awk '{print $2}')
+        if [ -n "$target" ]; then
+            target="${target##*/}"
+            upstream_type="tag"
+        else
+            for item in $($@ git ls-remote $url --heads origin "refs/heads/*" | awk '{print $2}'); do
+                [ -n "$item" ] || continue
+                item="${item##*/}"
+                { [ "$item" != "main" ] && [ "$item" != "master" ]; } ||
+                { target="$item"; upstream_type="branch"; break; }
+            done
+        fi
+        [ -n "$target" ] ||
+        die "$FUNCNAME" "Branch/tag '$upstream_name', 'main', and 'master' doesn't exist." \
+        "Specify a valid branch/tag name, please"
+    fi
 
-    ( git fetch --depth 1 "${url}" 2>/dev/null ) ||  git fetch "${url}"
-    git reset --hard FETCH_HEAD
+    log "$FUNCNAME" '$target' "$target"
+    log "$FUNCNAME" '$upstream_type' "$upstream_type"
 
-    git rev-parse --short HEAD
-    git describe --always
+    if [ "$($@ git -C "$_des" rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ]; then
 
-    git submodule deinit --all -f
-    git submodule init
-    git submodule sync
-    git submodule update --init --remote --recursive --force
+        # [ "$target" = "$upstream_name" ] || {
+        #     $@ git remote remove origin
+        #     $@ git remote add origin "${url}"
+        # }
+
+        local remote_url=$($@ git -C "$_des" remote -v | grep fetch | grep origin | awk '{print $2}')
+        [ "$remote_url" = "$url" ] ||
+        $@ git remote set-url origin "${url}" 2>/dev/null ||
+            $@ git remote add origin "${url}" ||
+            die "$FUNCNAME" "git remote set-url origin \"${url}\"" "failed at $LINENO"
+
+
+        if [ "$upstream_type" = "branch" ]; then
+
+            [ -z "$target" ] ||
+            $@ git remote set-branches origin $target ||
+            die "$FUNCNAME" "git remote set-branches origin $target" "failed at $LINENO"
+
+            log "$FUNCNAME" 'fetch' "${url}"
+            $@ git fetch --depth 1 "${url}" $target 2>/dev/null ||
+            $@ git fetch "${url}" $target ||
+            # $@ git fetch --depth 1 origin $target
+            die "$FUNCNAME" "git fetch --depth 1 \"${url}\" $target" "failed at $LINENO"
+
+            local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
+            [ "$target" = "$target_ref" ] || {
+                # fatal: a branch named 'master' already exists when "$target" = "$target_ref"
+                $@ git branch $target FETCH_HEAD 2>/dev/null ||
+                $@ git checkout -b $target --track origin/$target ||
+                die "$FUNCNAME" "git checkout -b $target --track origin/$target" "failed at $LINENO"
+
+                $@ git switch $target 2>/dev/null || $@ git switch -c $target ||
+                die "$FUNCNAME" "git switch $target" "failed at $LINENO"
+
+                target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
+                [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
+            }
+
+            log "$FUNCNAME" '$target_ref' "$target_ref"
+            [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
+
+            $@ git branch --set-upstream-to=origin/$target $target
+            $@ git reset --hard origin/$target ||
+                die "$FUNCNAME" "git reset --hard origin/$target" "failed at $LINENO"
+
+        elif [ "$upstream_type" = "tag" ]; then
+
+            local targets=$($@ git tag)
+            contains "$targets" "$target" ||
+            # $@ git fetch --all --tags
+            $@ git fetch --depth 1 "${url}" tag $target --no-tags 2>/dev/null ||
+            $@ git fetch --depth 1 "${url}" refs/tags/$target:refs/tags/$target 2>/dev/null ||
+            git fetch "${url}" tag $target --no-tags ||
+                die "$FUNCNAME" "git fetch \"${url}\" tag $target --no-tags" "failed at $LINENO"
+
+            local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
+            [ -z "${target_ref##*${target}*}" ] || {
+                $@ git checkout tags/$target -b $target ||
+                die "$FUNCNAME" "git checkout tags/$target -b $target" "failed at $LINENO"
+
+                target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
+                [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
+            }
+
+            log "$FUNCNAME" '$target_ref' "$target_ref"
+            [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
+
+            $@ git reset --hard tags/$target ||
+            die "$FUNCNAME" "git reset --hard tags/$target" "failed at $LINENO"
+        fi
+
+
+        $@ git rev-parse --short HEAD
+        $@ git describe --always
+
+        $@ git submodule deinit --all -f
+        $@ git submodule init
+        $@ git submodule sync
+        $@ git submodule update --init --remote --recursive --force
+    else
+        find "$_des" -mindepth 1 -delete
+        $@ git clone --recursive --depth 1 --branch $target "${url}" "$_des" ||
+            die "$FUNCNAME" "git clone --recursive --depth 1 --branch $target \"${url}\" \"$_des\"" "failed at $LINENO"
+    fi
 }
 
-# $1 user_shared
-# $2 repo_name
-# $3 $_des
-# $4 $_res
+# $1 repo_name
+# $2 $_des
+# $3 $_res
 # working under "${_des%/*}"
 extract_tar() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local user_shared="$1"
-    local repo_name="$2"
-    shift 2
+    local repo_name="$1"
+    shift 1
     local _des="$1"
     local _res="$2"
 
@@ -1296,7 +1447,7 @@ pkg_to_make_dir() {
     # arg1: pre-extract
     # arg2: package name
     # arg3: path to DESTDIR
-    run_hook "$user_shared" pre-extract "$pkg" "$pkg_dir"
+    run_hook pre-extract "$pkg" "$pkg_dir"
 
     while read -r src_url dest || ok "${src_url%%\#*}"; do
         IFS=$'\3' read -r _res _des \
@@ -1308,112 +1459,100 @@ pkg_to_make_dir() {
 
         case $_res in
             git+*)
-                mkcd "$FUNCNAME" "$make_dir/$dest"
+                mkcd "$FUNCNAME" "$mak_dir/$dest"
                 rsync -aqz "$_des/." .
             ;;
 
             *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
-                extract_tar "$user_shared" "$pkg_name" "$_des" "$_res"
-                # mkcd "$FUNCNAME" "$make_dir/${_des##*/}"
-                mkcd "$FUNCNAME" "$make_dir/$dest"
+                extract_tar "$pkg_name" "$_des" "$_res"
+                # mkcd "$FUNCNAME" "$mak_dir/${_des##*/}"
+                mkcd "$FUNCNAME" "$mak_dir/$dest"
                 rsync -aqz "$_des/." .
             ;;
 
             *?*)
-                mkcd "$FUNCNAME" "$make_dir/$dest"
+                mkcd "$FUNCNAME" "$mak_dir/$dest"
                 cp -LRf "$_res" .
             ;;
         esac
     done < "$repo_dir/sources" || die "$FUNCNAME" "$pkg_name" "Failed to extract $_res"
 }
 
-# $1 pkg : dependence with repo path
-# $2 raw/expl: policies
-# $3 filter: filter switch
-# $4 relation: dependencies pair
-# $5 dependency type
+# $1 pkg        : dependence with repo path
+# $2 policy     : raw/expl | policies
+# $3 filter     : filter switch
+# $4 appended   : dependencies appended
+# $5 dep_stage  : dependent type/stage [build time / runtime]
 pkg_depends() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg="$1"
+    local policy="$2"
+    local filter="$3"
+    local appended="$4"
+    local dep_stage="$5"
+
     log "$FUNCNAME" '$pkg'  "$pkg"
+    log "$FUNCNAME" '$policy' "$policy"
+    log "$FUNCNAME" '$filter' "$filter"
+    log "$FUNCNAME" '$appended' "$appended"
+    log "$FUNCNAME" '$dep_stage' "$dep_stage"
+
     log "$FUNCNAME" '$deps' "$deps"
+    log "$FUNCNAME" '$explicit' "$explicit"
+    log "$FUNCNAME" '$sys_db/$pkg' "$sys_db/$pkg"
 
     # Resolve all dependencies and generate an ordered list. The deepest
     # dependencies are listed first and then the parents in reverse order.
     ! contains "$deps" "$pkg" || return 0
 
     # Filter out non-explicit, already installed packages.
-    null "$3" || ok "$2" || contains "$explicit" "$pkg" ||
-        ! [ -d "$sys_db/$pkg" ] || return 0
+    null "$filter" || ok "$policy" || contains "$explicit" "$pkg" ||
+        [ ! -d "$sys_db/$pkg" ] || return 0
 
     # Detect circular dependencies and bail out.
     # Looks for multiple repeating patterns of (dep dep_parent) (5 is max).
-    case " $4 " in
-*" ${4##* } "*" ${pkg} "\
-*" ${4##* } "*" ${pkg} "\
-*" ${4##* } "*" ${pkg} "\
-*" ${4##* } "*" ${pkg} "\
-*" ${4##* } "*" ${pkg} "*)
+    case " $appended " in
+*" ${appended##* } "*" ${pkg} "\
+*" ${appended##* } "*" ${pkg} "\
+*" ${appended##* } "*" ${pkg} "\
+*" ${appended##* } "*" ${pkg} "\
+*" ${appended##* } "*" ${pkg} "*)
         die "$FUNCNAME" "$pkg <> ${4##* }" "circular dependency detected"
     esac
 
-    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
-    local repo_dir
-    if [ -d "$sys_db/$pkg" ]; then
-        repo_dir="$sys_db/$pkg"
-    else
+    local repo_dir="$sys_db/$pkg"
+    [ -d "$sys_db/$pkg" ] ||
         repo_dir="$(delegate "pkg_find" "$pkg")"
-        null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
-    fi
 
-    if null "$repo_dir"; then
-        die "$FUNCNAME" '' "\$repo_dir is not defined"
-    else
-        log "$FUNCNAME" '$repo_dir' "$repo_dir"
-    fi
+    ok "$repo_dir" || die "$FUNCNAME" "$pkg" '$repo_dir not found'
 
-    if [ -z ${KISS_ROOT+x} ]; then
-        log "$FUNCNAME" '' "\$KISS_ROOT is not defined"
-    else
-        log "$FUNCNAME" '$KISS_ROOT defined' "$KISS_ROOT"
-    fi
-
+    log "$FUNCNAME" '$repo_dir' "$repo_dir"
+    log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
     log "$FUNCNAME" '$4' "$4"
+    log "$FUNCNAME" '$appended' "$appended"
 
     # Packages which exist and have depends.
-    null "$(delegate "pkg_find" "$pkg")" || [ ! -e "$repo_dir/depends" ] || {
+    null "$(delegate "pkg_find" "$pkg")" ||
+    [ ! -e "$repo_dir/depends" ] ||
+    # Recurse through the dependencies of the child packages.
+    while read -r dep dep_type || ok "$dep"; do
+        log "$FUNCNAME" '$dep' "$dep"
+        log "$FUNCNAME" '$dep_type' "$dep_type"
 
-        # Recurse through the dependencies of the child packages.
-        while read -r dep dep_type || ok "$dep"; do
-            ! ok "${dep##\#*}" || {
-                :
-                log "$FUNCNAME" '$dep' "$dep"
-                log "$FUNCNAME" '$dep_type' "$dep_type"
-                local found_duplicated=0
-                for I in $4; do
-                    [ "$I" = "$pkg" ] && {
-                        found_duplicated=1
-                        break
-                    }
-                done
-                [ $found_duplicated -eq 0 ] && {
-                    if [ -z ${KISS_ROOT+x} ]; then
-                        pkg_depends "$dep" '' "$3" "$4 $pkg" "$dep_type"
-                    else
-                        if null "$dep_type"; then
-                            pkg_depends "$dep" '' "$3" "$4 $pkg" "$dep_type"
-                        else
-                            pkg_make_depends "$dep" '' "$3" "$4 $pkg" "$dep_type"
-                        fi
-                    fi
-                }
-            }
-        done < "$repo_dir/depends" || :
-    }
+        null ${dep##*/*} ||
+        contains "$appended" "$pkg" || {
+            { ok "${dep##\#*}" && [ ! -z ${KISS_ROOT:+x} ]; } ||
+                pkg_depends "$dep" '' "$filter" "$4 $pkg" "$dep_type"
+            { [ -z ${KISS_ROOT:+x} ] || ok "$dep_type"; } ||
+                pkg_depends "$dep" '' "$filter" "$4 $pkg" "$dep_type"
+            { [ -z ${KISS_ROOT:+x} ] || null "$dep_type"; } ||
+                pkg_make_depends "$dep" '' "$filter" "$4 $pkg" "$dep_type"
+        }
+    done < "$repo_dir/depends" || :
+
     # Add parent to dependencies list.
-    if ! equ "$2" expl || { equ "$5" make && null "$(delegate "pkg_cache" "$pkg")"; }; then
-        deps="$deps $1"
-    fi
+    equ "$policy" expl && { ! equ "$dep_stage" make || ok "$(delegate "pkg_cache" "$pkg")"; } ||
+        deps="$deps $pkg"
 
     for item in $deps; do
         log "$FUNCNAME" '$deps' "$item"
@@ -1473,7 +1612,7 @@ pkg_strip() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # Strip package binaries and libraries. This saves space on the system as
     # well as on the tarballs we ship for installation.
-    [ -f "$make_dir/nostrip" ] || equ "$KISS_STRIP" 0 && return
+    [ -f "$mak_dir/nostrip" ] || equ "$KISS_STRIP" 0 && return
 
     log "$FUNCNAME" "$1" "Stripping binaries and libraries"
 
@@ -1806,7 +1945,7 @@ pkg_tar() {
     # arg1: post-package
     # arg2: package name
     # arg3: path to tarball
-    run_hook "$user_shared" post-package "$pkg" "$tar_file"
+    run_hook post-package "$pkg" "$tar_file"
 }
 
 # $@ packages name
@@ -1873,9 +2012,11 @@ pkg_build_all() {
         ! [ -f "$repo_dir/sources" ] || pkg_verify "$repo_dir" "$pkg"
     done
 
-    [ -z ${KISS_ROOT+x} ]          || log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
-    [ -z ${KISS_XBUILD_TRIPLE+x} ] || log "$FUNCNAME" 'Building on $KISS_XBUILD_TRIPLE' "$KISS_XBUILD_TRIPLE"
-    [ -z ${KISS_XHOST_TRIPLE+x} ]  || log "$FUNCNAME" 'Building for $KISS_XHOST_TRIPLE' "$KISS_XHOST_TRIPLE"
+    [ -z ${KISS_ROOT:+x} ]         || log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
+    # Building on
+    [ -z ${KISS_XBUILD_TRIPLE+x} ] || log "$FUNCNAME" '$KISS_XBUILD_TRIPLE' "$KISS_XBUILD_TRIPLE"
+    # Building for
+    [ -z ${KISS_XHOST_TRIPLE+x} ]  || log "$FUNCNAME" '$KISS_XHOST_TRIPLE' "$KISS_XHOST_TRIPLE"
     log "$FUNCNAME" '$bin_dir' "$bin_dir"
     [ -z ${CC+x} ]       || log "$FUNCNAME" '$CC'       "$CC"
     [ -z ${CXX+x} ]      || log "$FUNCNAME" '$CXX'      "$CXX"
@@ -1897,7 +2038,7 @@ pkg_build_all() {
         # arg2: package name
         # arg3: number in queue
         # arg4: total in queue
-        run_hook "$user_shared" queue "$pkg" "$_build_cur" "$#"
+        run_hook queue "$pkg" "$_build_cur" "$#"
 
         log "$FUNCNAME" '$repo_dir' "$repo_dir [local]"
         null "$repo_dir" && die "$FUNCNAME" '' "\$repo_dir not found [local]"
@@ -1938,7 +2079,7 @@ pkg_build() {
     # avoid collisions with other packages.
 
     log "$FUNCNAME" '$pkg_root' "$pkg_root"
-    log "$FUNCNAME" '$make_dir' "$make_dir"
+    log "$FUNCNAME" '$mak_dir'  "$mak_dir"
     log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"
     log "$FUNCNAME" '$bin_dir'  "$bin_dir"
     log "$FUNCNAME" '$log_dir'  "$log_dir"
@@ -1950,19 +2091,19 @@ pkg_build() {
     ok "$repo_dir" || die "$FUNCNAME" '$repo_dir' "$repo_dir"
 
     log "$FUNCNAME" '$repo_dir'    "$repo_dir [local]"
-    log "$FUNCNAME" '$pkg'  "$pkg"
-    log "$FUNCNAME" '$db'   "$db"
-    log "$FUNCNAME" '$user' "$user"
+    log "$FUNCNAME" '$pkg'         "$pkg"
+    log "$FUNCNAME" '$db'          "$db"
+    log "$FUNCNAME" '$LOGNAME'     "$LOGNAME"
     log "$FUNCNAME" '$pkg_dir/$db' "$pkg_dir/$db"
 
-    mkcd "$FUNCNAME" "$make_dir" "$pkg_dir/$db"
+    mkcd "$FUNCNAME" "$mak_dir" "$pkg_dir/$db"
 
     log "$FUNCNAME" "$pkg" "Starting build"
 
     # arg1: pre-build
     # arg2: package name
     # arg3: path to build directory
-    run_hook "$user_shared" pre-build "$pkg" "$make_dir"
+    run_hook pre-build "$pkg" "$mak_dir"
 
     # # Attempt to create the log file early so any permissions errors are caught
     # # before the build starts. 'tee' is run in a pipe and POSIX shell has no
@@ -1981,8 +2122,8 @@ pkg_build() {
     # Call the build script, log the output to the terminal and to a file.
     # There's no PIPEFAIL in POSIX shell so we must resort to tricks like kill.
     {
-        log "$FUNCNAME" '$user' "$(whoami)"
-        log "$FUNCNAME" '$PWD' "$PWD"
+        log "$FUNCNAME" '$LOGNAME' "$(whoami)"
+        log "$FUNCNAME" '$PWD'     "$PWD"
         # Give the script a modified environment. Define toolchain program
         # environment variables assuming a generic environment by default.
         #
@@ -1990,6 +2131,7 @@ pkg_build() {
         # in anything using autotools, meson, cmake, etc. Define KISS_ROOT as
         # the sanitized value used internally by the package manager. This is
         # safe to join with other paths.
+        as $src_root_user env
         AR="${AR:-ar}" \
         CC="${CC:-cc}" \
         CXX="${CXX:-c++}" \
@@ -2004,7 +2146,7 @@ pkg_build() {
         REPO_MAIN="$REPO_MAIN" \
         KISS_ROOT="$KISS_ROOT" \
         SRC_PATH="$src_dir" \
-        MAKE_PATH="$make_dir" \
+        MAKE_PATH="$mak_dir" \
         \
         "$repo_dir/build" "$pkg_dir" "$repo_ver" 2>&1 || {
             log "$FUNCNAME" "$pkg" "Build failed"
@@ -2013,7 +2155,7 @@ pkg_build() {
             # arg1: build-fail
             # arg2: package name
             # arg3: path to build directory
-            (run_hook "$user_shared" build-fail "$pkg" "$make_dir") || :
+            (run_hook build-fail "$pkg" "$mak_dir") || :
 
             # pkg_clean
             kill 0
@@ -2032,7 +2174,7 @@ pkg_build() {
     # arg1: post-build
     # arg2: package name
     # arg3: path to DESTDIR
-    run_hook "$user_shared" post-build "$pkg" "$pkg_dir"
+    run_hook post-build "$pkg" "$pkg_dir"
 }
 
 pkg_checksum() {
@@ -2241,7 +2383,7 @@ pkg_swap() {
     [ -f "$sys_ch/$_fnr" ] || [ -h "$sys_ch/$_fnr" ] ||
         die "$FUNCNAME" "" "Alternative '$1 ${2:-null}' doesn't exist"
 
-    if [ -f "$KISS_ROOT$2" ]; then
+    if [ -f "$KISS_ROOT/${2#/}" ]; then
         pkg_owner "/${2#/}" ||
             die "$FUNCNAME" "" "File '$2' exists on filesystem but isn't owned"
 
@@ -2249,13 +2391,13 @@ pkg_swap() {
 
         # Convert the current owner to an alternative and rewrite its manifest
         # file to reflect this.
-        cp -Pf "$KISS_ROOT$2" "$sys_ch/$_owns>${_fnr#*>}"
+        cp -Pf "$KISS_ROOT/${2#/}" "$sys_ch/$_owns>${_fnr#*>}"
         manifest_replace "$_owns" "$2" "/$cho_db/$_owns>${_fnr#*>}"
     fi
 
     # Convert the desired alternative to a real file and rewrite the manifest
     # file to reflect this. The reverse of above.
-    mv -f "$sys_ch/$_fnr" "$KISS_ROOT/$2"
+    mv -f "$sys_ch/$_fnr" "$KISS_ROOT/${2#/}"
     manifest_replace "$1" "/$cho_db/$_fnr" "$2"
 }
 
@@ -2291,7 +2433,7 @@ pkg_install_files() {
     shift 1
     # Copy files and create directories (preserving permissions).
     # The 'test $1' will run with '-z' for overwrite and '-e' for verify.
-    while { read -r file && _file=$KISS_ROOT$file; } do case $file in
+    while { read -r file && _file=$KISS_ROOT/${file#/}; } do case $file in
         */)
             # Skip directories if they already exist in the file system.
             # (Think /usr/bin, /usr/lib, etc).
@@ -2346,7 +2488,7 @@ pkg_remove_files() {
     # functions allows us to stop duplicating code.
     while read -r file; do
         case $file in /etc/?*[!/])
-            local hash="$(delegate "sh256" "$KISS_ROOT/$file")"
+            local hash="$(delegate "sh256" "$KISS_ROOT/${file#/}")"
 
             read -r sum_pkg <&3 ||:
 
@@ -2383,7 +2525,7 @@ pkg_remove_files() {
 pkg_etc() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg_name="$1"
-    local hash="$(delegate "sh256" "$tar_dir/$file" "$KISS_ROOT$file")"
+    local hash="$(delegate "sh256" "$tar_dir/$file" "$KISS_ROOT/${file#/}")"
 
     local sum_new=${hash%%"$newline"*}
     local sum_sys=${hash#*"$newline"}
@@ -2453,8 +2595,8 @@ pkg_remove() {
     # arg1: pre-remove
     # arg2: package name
     # arg3: path to installed database
-    run_hook_pkg "$user_shared" pre-remove "$pkg"
-    run_hook "$user_shared"     pre-remove "$pkg" "$sys_db/$pkg"
+    run_hook_pkg pre-remove "$pkg"
+    run_hook     pre-remove "$pkg" "$sys_db/$pkg"
 
     log "$FUNCNAME" '$pkg' "$pkg"
     log "$FUNCNAME" "removing package" "$pkg"
@@ -2466,6 +2608,7 @@ pkg_remove() {
             pkg_remove_files < "$sys_db/$pkg/manifest" 3< "$etcsums_clone"
         }
     }
+    rm -rf "$sys_db/$pkg"
     # Reset 'trap' to its original value. Removal is done so
     # we no longer need to block 'Ctrl+C'.
     trap pkg_clean EXIT INT
@@ -2609,7 +2752,7 @@ pkg_install() {
     # arg1: pre-install
     # arg2: package name
     # arg3: path to extracted package
-    run_hook "$user_shared" pre-install "$pkg_name" "$tar_dir"
+    run_hook pre-install "$pkg_name" "$tar_dir"
 
     pkg_conflicts "$pkg_name"
 
@@ -2681,12 +2824,12 @@ pkg_install() {
         # arg1: post-install
         # arg2: package name
         # arg3: path to installed package database
-        run_hook_pkg "$user_shared" post-install "$pkg_name"
-        run_hook "$user_shared"     post-install "$pkg_name" "$sys_db/$pkg_name"
+        run_hook_pkg post-install "$pkg_name"
+        run_hook     post-install "$pkg_name" "$sys_db/$pkg_name"
 
         log "$FUNCNAME" '$sys_db'   "$sys_db"
-        log "$FUNCNAME" '$tar_dir'  "$tar_dir"  # /root/.cache/kiss/proc/$pkg_name/extract
-        log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"  # /root/.cache/kiss/proc/$pkg_name/pkg
+        log "$FUNCNAME" '$tar_dir'  "$tar_dir"  # $HOME/.cache/kiss/proc/$pkg_name/extract
+        log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"  # $HOME/.cache/kiss/proc/$pkg_name/pkg
         log "$FUNCNAME" '$db'       "$db"
         log "$FUNCNAME" '$pkg_name' "$pkg_name"
         log "$FUNCNAME" 'repo in $pkg_dir' "$pkg_dir/$db/$pkg_name"
@@ -2822,27 +2965,27 @@ pkg_update_repo() {
 
         log "$FUNCNAME" '$PWD' "$PWD"
 
-        # am_owner "$PWD" || {
-        #     printf 'Need "%s" to update\n' "$user"
-        #     set -- as_user
-        # }
+        IFS=$'\3' read -r  pwd_user _  \
+            < <(am_owner "$PWD") > /dev/null ||
+            die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+        equ "pwd_user" "$LOGNAME" || {
+            log "$FUNCNAME" 'Needs "$user" to update to' "$pwd_user"
+            set -- $(delegate as_user "$user")
+        }
 
         # arg1: pre-update
         # arg2: need su?
         # arg3: owner
         # env:  PWD is path to repository
-        as_user "$user_shared" \
-        run_hook "$user_shared" pre-update "$#" "$user"
+        run_hook pre-update "$#" "$user"
 
         case $repo_type in git)
-            as_user "$user_shared" \
             pkg_update_git "$@"
         esac
 
         # arg1: post-update
         # env:  PWD is path to repository
-        as_user "$user_shared" \
-        run_hook "$user_shared" post-update
+        run_hook post-update
     }
 }
 
@@ -2948,7 +3091,7 @@ pkg_clean() {
     esac
 
     case ${KISS_DEBUG:-0}-${_KISS_LVL:-1} in
-        0-1) null "$proc" || [ "$proc/$pkg" = "/$pkg" ] || tmp_clear "$pkg" ;;
+        0-1) null "$proc" || [ "$(standardize "$proc/$pkg")" = "/$pkg" ] || tmp_clear "$pkg" ;;
         0-*) null "$tar_dir" || [ "$(occurrences "$tar_dir" "/")" -eq "1" ] || find "$tar_dir" -mindepth 1 -delete
     esac
 }
@@ -3014,13 +3157,13 @@ trap_on() {
 }
 
 trap_INT() {
-    run_hook "$user_shared" SIGINT
+    run_hook SIGINT
     exit 1
 }
 
 trap_EXIT() {
     pkg_clean
-    run_hook "$user_shared" SIGEXIT
+    run_hook SIGEXIT
 }
 
 trap_off() {
@@ -3049,7 +3192,7 @@ init_dirs() {
     [ "$log_dir" = "$log_dir_original" ] || log_dir="$log_dir_original"
     touch "$log_dir/build.log"
 
-    # Root directory.
+    # Root directory standardization
     KISS_ROOT=${KISS_ROOT%"${KISS_ROOT##*[!/]}"}
     [ ! -z "${REPO_MAIN+x}" ] || [ "$action" != "i" ] || [ "$action" != "install" ] || die "$FUNCNAME" '$REPO_MAIN' "for reverse copying sys_db/repo to the main repo"
     # This allows for automatic setup of a KISS chroot and will
@@ -3067,6 +3210,7 @@ init_dirs() {
     # Top-level cache directory.
     cache_dir=${XDG_CACHE_HOME:-"${HOME%"${HOME##*[!/]}"}/.cache"}
     cache_dir=${cache_dir%"${cache_dir##*[!/]}"}/kiss
+    [ -d "$cache_dir" ] || mkdir -p "$cache_dir"
 
     # Persistent cache directories.
     src_root=$cache_dir/sources
@@ -3084,7 +3228,7 @@ init_dirs() {
             \ln -sf "${KISS_SRC_ROOT}" "$src_root"
         fi
     fi
-    user_shared="$(stat -c '%U' "${KISS_SRC_ROOT}")"
+    src_root_user="$(stat -c '%U' "${KISS_SRC_ROOT}")"
     src_root="${KISS_SRC_ROOT}"
 
     # Top-level Temporary cache directory.
@@ -3097,7 +3241,7 @@ init_dirs() {
     [ -d "$volatile" ] || mkdir -p "$volatile"
 
     log "$FUNCNAME" '$KISS_SRC_ROOT' "$KISS_SRC_ROOT"
-    log "$FUNCNAME" '$user_shared'   "$user_shared"
+    log "$FUNCNAME" '$src_root_user' "$src_root_user"
     log "$FUNCNAME" '${time}'        "${time}"
     log "$FUNCNAME" '$sys_db'        "$sys_db"
     log "$FUNCNAME" '$log_dir'       "$log_dir"
@@ -3105,60 +3249,130 @@ init_dirs() {
 
 tmp_clear() {
     local pkg="$1"
-    [ "$make_dir" = "/make" ]   || find "$make_dir" -mindepth 1 -delete;
-    [ "$tmp_dir" = "/tmp" ]     || find "$tmp_dir"  -mindepth 1 -delete;
-    [ "$pkg_dir" = "/pkg" ]     || find "$pkg_dir"  -mindepth 1 -delete;
-    [ "$tar_dir" = "/extract" ] || find "$tar_dir"  -mindepth 1 -delete;
-    [ "$bin_dir" = "/bin" ]     || find "$bin_dir"  -mindepth 1 -delete;
-    # [ "$src_dir" = "/$pkg" ]    || find "$src_dir"  -mindepth 1 -delete;
+    [ ! -d "$mak_dir" ] || [ "$mak_dir" = "/make" ]    || find "$mak_dir" -mindepth 1 -delete
+    [ ! -d "$tmp_dir" ] || [ "$tmp_dir" = "/tmp" ]     || find "$tmp_dir" -mindepth 1 -delete
+    [ ! -d "$pkg_dir" ] || [ "$pkg_dir" = "/pkg" ]     || find "$pkg_dir" -mindepth 1 -delete
+    [ ! -d "$tar_dir" ] || [ "$tar_dir" = "/extract" ] || find "$tar_dir" -mindepth 1 -delete
+    [ ! -d "$bin_dir" ] || [ "$bin_dir" = "/bin" ]     || find "$bin_dir" -mindepth 1 -delete
+    # [ "$src_dir" = "/$pkg" ]    || find "$src_dir"  -mindepth 1 -delete
     # [ ! -d "${KISS_TMPDIR}/proc" ] ||
     # for item in $(\ls -x "${KISS_TMPDIR}/proc"); do [ "$item" = "$pkg" ] || \rm -rf "${KISS_TMPDIR}/proc/$item"; done
 }
 
+
+maintain_dir() {
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local root_dir="$1"
+    local target_dir="$2"
+    shift $#
+    IFS=$'\3' read -r root_dir_user root_dir_group \
+        < <(am_owner "$root_dir") > /dev/null ||
+        die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+
+    log "$FUNCNAME" '$root_dir' "$root_dir"
+    log "$FUNCNAME" '$root_dir_user' "$root_dir_user"
+
+    if [ -d "$target_dir" ]; then
+        IFS=$'\3' read -r target_dir_user target_dir_group \
+            < <(am_owner "$target_dir") > /dev/null ||
+        die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+
+        { equ "$target_dir_user" "$root_dir_user" && equ "$target_dir_group" "$root_dir_group"; } || {
+            if equ "$target_dir_user" "$root_dir_user"; then
+                $(delegate as_user "$target_dir_user") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
+                $(delegate as_user "$root_dir_user") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
+                # Hard code root is not good
+                # $(delegate as_user "root") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
+                die "$FUNCNAME" "chgrp ${target_dir}" "failed on $LINENO"
+            else
+                $(delegate as_user "$target_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+                $(delegate as_user "$root_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+                # Hard code root is not good
+                # $(delegate as_user "root") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+                die "$FUNCNAME" "chown ${target_dir}" "failed on $LINENO"
+            fi
+        }
+
+        # File name might have spaces
+        ORG_IFS=$IFS
+        IFS=$'\n'
+        index=0
+        for item in $(find "${target_dir}" -name "*"); do
+            [ "$index" -le 10 ] || break
+            [ -f "$item" ] || continue
+            item_user="$(stat -c '%U' "$item")"
+            [ "$item_user" != "$root_dir_user" ] || { index=$((index + 1)); continue; }
+
+            log "$FUNCNAME" '$item' "$item"
+            log "$FUNCNAME" '$item_user' "$item_user"
+
+            log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+            as "$item_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+            as "$root_dir_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+            # Hard code root is not good
+            # $(delegate as_user "root") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+            die "$FUNCNAME" "chown ${target_dir}" "failed on $((LINENO - 3))"
+            break
+        done
+        IFS=$ORG_IFS
+    else
+        $(delegate as_user "$root_dir_user") mkdir -p "$target_dir"
+    fi
+}
+
 # make or point to pkg_name related dirs
+# $1 pkg
+# $2 reset needs
 tmp_dirs() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local pkg="$1"
+    local needs_reset="$2"
+
     debug "$FUNCNAME" '$pkg' "$pkg"
+    {
+        ok "$log_dir_original" || die "$FUNCNAME" "\$log_dir_original is not defined"
 
-    ok "$log_dir_original" || die "$FUNCNAME" "\$log_dir_original is not defined"
+        pkg_root="$proc/$pkg"
+        pkg_volatile="$volatile/$pkg"
+        [ -d "$pkg_volatile" ] || mkdir -p $pkg_volatile
 
-    pkg_root="$proc/$pkg"
-    pkg_volatile="$volatile/$pkg"
-    [ -d "$pkg_volatile" ] || mkdir -p $pkg_volatile
+        # Temporary cache directories.
+        mak_dir="$pkg_volatile/make"
+        tmp_dir="$pkg_volatile/tmp"
+        log_dir="$pkg_root/logs"
+        pkg_dir="$pkg_root/pkg"
+        tar_dir="$pkg_root/extract"
+        bin_dir="$pkg_root/bin"
 
-    # Temporary cache directories.
-    make_dir="$pkg_volatile/make"
-    tmp_dir="$pkg_volatile/tmp"
-    log_dir="$pkg_root/logs"
-    pkg_dir="$pkg_root/pkg"
-    tar_dir="$pkg_root/extract"
-    bin_dir="$pkg_root/bin"
+
+        # set +e will bypass the following exit
+        # [ -d "${pkg_root}" ] && equ "reset" "$2" && \rm -rf "$pkg_root"
+        # Removing "|| :", and adding the following line will get the same effect
+        # [ $? -ne 0 ] && log "$FUNCNAME" "" "[] error occurred"
+
+
+        mkdir -p "$log_dir" "$bin_dir" \
+            "$mak_dir" "$pkg_dir" "$tar_dir" "$tmp_dir"
+
+        [ ! -d "${pkg_root}" ] || ! equ "reset" "$needs_reset" || tmp_clear "$pkg"
+
+        [ "$(readlink -f "${log_dir}/build.log")" != "${log_dir_original}/build.log" ] &&
+        ln -sf "${log_dir_original}/build.log" "${log_dir}/build.log"
+
+        log "$FUNCNAME" '$log_dir_original' "$log_dir_original"
+    }
 
     src_dir="$src_root/$pkg"
     archive_dir="$archive_root/$pkg"
+    maintain_dir "$src_root" "$src_dir"
+    maintain_dir "$archive_root" "$archive_dir"
 
-    # set +e will bypass the following exit
-    # [ -d "${pkg_root}" ] && equ "reset" "$2" && \rm -rf "$pkg_root"
-    # Removing "|| :", and adding the following line will get the same effect
-    # [ $? -ne 0 ] && log "$FUNCNAME" "" "[] error occurred"
-
-    mkdir -p "$log_dir" "$bin_dir" \
-        "$make_dir" "$pkg_dir" "$tar_dir" "$tmp_dir" "$src_dir" "$archive_dir"
-
-    [ ! -d "${pkg_root}" ] || ! equ "reset" "$2" || tmp_clear "$pkg"
-
-    [ "$(readlink -f "${log_dir}/build.log")" != "${log_dir_original}/build.log" ] &&
-    ln -sf "${log_dir_original}/build.log" "${log_dir}/build.log"
-
-    log "$FUNCNAME" '$log_dir_original' "$log_dir_original"
-
-    log "$FUNCNAME" '$make_dir' "$make_dir"
-    log "$FUNCNAME" '$tmp_dir'  "$tmp_dir"
-    log "$FUNCNAME" '$log_dir'  "$log_dir"
-    log "$FUNCNAME" '$pkg_dir'  "$pkg_dir"
-    log "$FUNCNAME" '$tar_dir'  "$tar_dir"
-    log "$FUNCNAME" '$bin_dir'  "$bin_dir"
+    log "$FUNCNAME" '$mak_dir' "$mak_dir"
+    log "$FUNCNAME" '$tmp_dir' "$tmp_dir"
+    log "$FUNCNAME" '$log_dir' "$log_dir"
+    log "$FUNCNAME" '$pkg_dir' "$pkg_dir"
+    log "$FUNCNAME" '$tar_dir' "$tar_dir"
+    log "$FUNCNAME" '$bin_dir' "$bin_dir"
 
     # printf "%s" "$pkg_root"
 }
@@ -3225,7 +3439,7 @@ args() {
             esac
 
             # Order the argument list based on dependence.
-            IFS=$'\3' read -r order redro < <(pkg_order "$@")
+            IFS=$'\3' read -r order redro < <(pkg_order "$@") || die "$FUNCNAME" 'pkg_order' "failed on $LINENO"
             for pkg in $order; do
                 tmp_dirs "$pkg"
             done
@@ -3245,10 +3459,14 @@ args() {
     # Intended behavior.
     # shellcheck disable=2030,2031
 
+    log "$FUNCNAME" '$KISS_FORCE' "$KISS_FORCE"
     case $action in a|alternatives|i|install|r|remove)
-        if ok "$action" && ! am_owner "$KISS_ROOT/"; then
+        IFS=$'\3' read -r  kiss_root_user _ \
+            < <(am_owner "$KISS_ROOT/") > /dev/null ||
+            die "$FUNCNAME" 'am_owner' "failed on $LINENO"
+        if ok "$action" && ! equ "$LOGNAME" "$kiss_root_user"; then
             trap_off
-            as_user "root" env \
+            $(delegate as_user "kiss_root_user") env \
                 LOGNAME="$user" \
                 HOME="$HOME" \
                 XDG_CACHE_HOME="$XDG_CACHE_HOME" \
@@ -3262,6 +3480,8 @@ args() {
                 REPO_MAIN="$REPO_MAIN" \
                 KISS_PID="$KISS_PID" \
                 _KISS_LVL="$_KISS_LVL" \
+                SRC_PATH="$src_dir" \
+                MAKE_PATH="$mak_dir" \
                 "$0" "$action" "$@"
 
             trap_on
@@ -3385,7 +3605,7 @@ cross_flags() {
     export PKG_CONFIG_SYSROOT_DIR=${KISS_ROOT}
 
     # Don't carry over flags if this is a cross build
-    if [ ! -z $KISS_ROOT ]; then
+    if [ ! -z ${KISS_ROOT:+x} ]; then
         unset CFLAGS
         unset CXXFLAGS
         unset LDFLAGS
@@ -3398,7 +3618,7 @@ cross_flags() {
     fi
 
     # Set the compiler target architecture
-    if [ -z "$KISS_ROOT" ]; then
+    if [ -z "${KISS_ROOT:+x}" ]; then
         # Local build. Allow user-set CFLAGS as per normal KISS, or override them in /etc/os-buildflags
         export CC="${CC:-clang}"
         export CXX="${CXX:-clang++}"
@@ -3458,7 +3678,7 @@ main() {
     # Color can be disabled via the environment variable KISS_COLOR. Colors are
     # also automatically disabled if output is being used in a pipe/redirection.
     equ "$KISS_COLOR" 0 || { :; ! [ -t 2 ]; } || { :
-        if [ -z "${KISS_ROOT+x}" ]; then
+        if [ -z "${KISS_ROOT:+x}" ]; then
             c1='\033[1;33m'
             c2='\033[1;34m'
             c3='\033[m'
