@@ -869,7 +869,7 @@ pkg_pick_up() {
         local tail_deep=1
         while [ -z "$(tail -n $tail_deep $sys_db/$target/keys)" ]; do : $((tail_deep += 1)); done
         IFS=$' ' read -r _ _ repo_source < <(tail -n $tail_deep $sys_db/$target/keys) \
-            > /dev/null || die "$FUNCNAME" "tail -n1 $sys_db/$target/keys" "failed on $LINENO"
+            > /dev/null || die "$FUNCNAME" "tail -n $tail_deep $sys_db/$target/keys" "failed on $LINENO"
         repo_source=$(delegate -- decode "$repo_source" "$REPO_MAIN" "REPO_MAIN")
         log "$FUNCNAME" '$repo_source' "$repo_source"
     }
@@ -3094,29 +3094,33 @@ pkg_install() {
     local repo_list=
     local length_index=$((WIDTH_SCOPE - TABSTOP))
 
+    IFS_ORIGIN=$IFS
+    IFS=$(printf '%b' "\x3")
     [ ! -f "$sys_db/$pkg_name/keys" ] ||
     while IFS=$' ' read -r ver rel repo; do
         null "$ver" || null "$rel" || null "$repo" ||
         { [ "$ver" = "$repo_ver" ] && [ "$rel" = "$repo_rel" ] && [ "$repo" = "$repo_source" ]; } ||
         [ -z "${repo_list##*${ver}*${rel}*${repo}*}" ] || {
             log "$(printf "%-${TABSTOP}s %-${length_index}s" "$index_key" "$ver")" "$rel" "$repo"
-            IFS="\n" repo_list="$repo_list${ver} ${rel} ${repo}\n"
+            repo_list="$repo_list${ver} ${rel} ${repo}${IFS}"
         }
         : $((index_key += 1))
     done < "$sys_db/$pkg_name/keys"
     # No \n at the end
-    IFS="\n" repo_list="$repo_list${repo_ver} ${repo_rel} ${repo_source_encoded}"
+    repo_list="$repo_list${repo_ver} ${repo_rel} ${repo_source_encoded}"
     : > "$sys_db/$pkg_name/keys"
-    IFS_ORIGIN=$IFS
-    IFS="\n"
     for item in $repo_list; do
         printf "%s\n" "$item" >> "$sys_db/$pkg_name/keys"
     done
     IFS=$IFS_ORIGIN
 
+    local tail_deep=1
+    while [ -z "$(tail -n $tail_deep "$sys_db/$pkg_name/keys")" ]; do : $((tail_deep += 1)); done
     IFS=$' ' read -r _ver _rel _repo_source \
-        < <(tail -n 1 "$sys_db/$pkg_name/keys" | grep "$repo_ver" | grep "$repo_rel") > /dev/null ||
-    die "$FUNCNAME" 'query current key' "failed on $LINENO"
+        < <(tail -n $tail_deep "$sys_db/$pkg_name/keys" | grep "$repo_ver" | grep "$repo_rel") > /dev/null || {
+        cat "$sys_db/$pkg_name/keys"
+        die "$FUNCNAME" 'query current key' "failed on $LINENO"
+    }
 
     [ "$_repo_source" == "$repo_source_encoded" ] || die "$FUNCNAME" '$_repo_source' "$_repo_source"
 
