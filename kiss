@@ -503,13 +503,19 @@ encode() {
 
     local key=
     local value=
+    local args=
 
-    for item in $(seq 1 2 $#); do
-        local key="$(eval "printf '%s' \"\$$item\"")"
-        local value="$(eval "printf '%s' \"\$$((item + 1))\"")"
-        set -f -- "\ " "$key" "$key" "$value" "\\$key" "\ "
+    for index in $(seq 1 2 $#); do
+        local key="$(eval "printf '%s' \"\${$index}\"")"
+        [ -n "$key" ] || key=\"\"
+        local value="$(eval "printf '%s' \"\${$((index + 1))}\"")"
+        [ -n "$value" ] || value=\"\"
+        args="$args \x03 $key $key $value \\$key \x03"
+        # If you have an array, and step in 2 elements at a time
+        # set -f -- "$@" "\ " "$key" "$key" "$value" "\\$key" "\ "
     done
-    printf "\n%s" "$(replace_left_with_right "$str" $@)"
+    log "$FUNCNAME" '$args' "$args"
+    printf "\n%s" "$(replace_left_with_right "$str" $args)"
 }
 
 # Surround each replacement with substitutions to handled escaped markers.
@@ -533,13 +539,25 @@ decode() {
 
     local value=
     local key=
+    local args=
 
-    for item in $(seq 1 2 $#); do
-        local value="$(eval "printf '%s' \"\$$item\"")"
-        local key="$(eval "printf '%s' \"\$$((item + 1))\"")"
-        set -f -- "\ " "\\$key" "$value" "$key" "$key" "\ "
+    # debug "$FUNCNAME" '$10' "$10" # will be treated as $1+0
+    # debug "$FUNCNAME" '${10}' "${10}"
+    for index in $(seq 1 2 $#); do
+        # log "$FUNCNAME" '$index' "$index"
+        local value="$(eval "printf '%s' \"\${$index}\"")"
+        [ -n "$value" ] || value=\"\"
+        debug "$FUNCNAME" '$value' "$value"
+        # log "$FUNCNAME" "\$$((index+1))" "$(eval echo \${$((index+1))})"
+        local key="$(eval "printf '%s' \"\${$((index + 1))}\"")"
+        [ -n "$key" ] || key=\"\"
+        debug "$FUNCNAME" '$key' "$key"
+        args="$args \x03 \\$key $value $key $key \x03"
+        # If you have an array, and step in 2 elements at a time
+        # set -f -- "$@" "\ " "\\$key" "$value" "$key" "$key" "\ "
     done
-    printf "\n%s" "$(replace_left_with_right "$str" $@)"
+    log "$FUNCNAME" '$args' "$args"
+    printf "\n%s" "$(replace_left_with_right "$str" $args)"
 }
 
 # $1 path
@@ -939,7 +957,6 @@ pkg_find() {
     debug "$FUNCNAME " '$pkg_name' "$pkg_name [local]"
     local test_key="$3"
     local search_paths="$4"
-    debug "$FUNCNAME" 'set -- ' ""
     debug "$FUNCNAME" '$#' "$#"
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
 
@@ -1128,19 +1145,26 @@ source_route() {
         repo_major repo_minor repo_patch repo_ident \
         < <(pkg_version_split "$pkg_name")
     ok "$repo_dir" || die "$FUNCNAME" '$repo_dir' "$repo_dir"
+    log "$FUNCNAME" '$repo_major' "$repo_major"
+    log "$FUNCNAME" '$repo_minor' "$repo_minor"
+    log "$FUNCNAME" '$repo_patch' "$repo_patch"
+    log "$FUNCNAME" '$repo_ident' "$repo_ident"
+    log "$FUNCNAME" '$pkg_name' "$pkg_name"
+
     [ -n "${ARCH:+x}" ] || die "$FUNCNAME" "\$ARCH must be defined" ||
     log "$FUNCNAME" '$ARCH' "$ARCH"
 
-    local _fnr=$(delegate -- decode "${src_url%"${src_url##*[!/]}"}" \
-        "$REPO_MAIN"  "REPO_MAIN" \
-        "$ARCH"       "ARCH"      \
-        "$repo_ver"   "VERSION"   \
-        "$repo_rel"   "RELEASE"   \
-        "$repo_major" "MAJOR"     \
-        "$repo_minor" "MINOR"     \
-        "$repo_patch" "PATCH"     \
-        "$repo_ident" "IDENT"     \
-        "$repo_name"  "PACKAGE"   )
+    local _fnr=$(delegate -- \
+            decode "${src_url%"${src_url##*[!/]}"}" \
+            "$REPO_MAIN"  "REPO_MAIN" \
+            "$ARCH"       "ARCH"      \
+            "$repo_ver"   "VERSION"   \
+            "$repo_rel"   "RELEASE"   \
+            "$repo_major" "MAJOR"     \
+            "$repo_minor" "MINOR"     \
+            "$repo_patch" "PATCH"     \
+            "$repo_ident" "IDENT"     \
+            "$repo_name"  "PACKAGE"   )
 
     log "$FUNCNAME" '$_fnr(uri)' "$_fnr"
 
@@ -1496,8 +1520,10 @@ extract_tar() {
     local tarball_manifest="$(delegate -- "slot_aquire" "$FUNCNAME" "$_des/tarball-manifest")"
     log "$FUNCNAME" '$tarball_manifest' "$tarball_manifest"
 
-    decompress "$_res" > "$tarball" ||
-        die "$FUNCNAME" "$repo_name" "Failed to decompress $_res"
+    decompress "$_res" > "$tarball" || {
+        \rm -f "$_res"
+        die "$FUNCNAME" "$repo_name" "Failed to decompress $_res and deleted. Try it again, please"
+    }
 
     tar xf "$tarball" ||
         die "$FUNCNAME" "$repo_name" "Failed to extract $_res"
@@ -2074,7 +2100,7 @@ pkg_build_all() {
 
     # If cross building, make sure the build machine has the correct deps
     set -- $makedeps
-    [ "$#" -gt 0 ] && die "$FUNCNAME" "You need the following packages on your build machine: $*"
+    [ "$#" -le 0 ] || die "$FUNCNAME" "You need the following packages on your build machine: $*"
 
     set --
 
@@ -2115,7 +2141,12 @@ pkg_build_all() {
 
     for pkg do
         pkg_download "$pkg"
-        [ ! -f "$repo_dir/sources" ] || pkg_verify "$repo_dir" "$pkg"
+        local repo_dir="$(delegate -- "pkg_find" "$pkg")"
+        IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_dir/version" ||
+        die "$FUNCNAME" "$pkg" "Failed to read version file ($repo_dir/version)"
+        [ ! -f "$repo_dir/sources" ] ||
+        [ "$repo_ver" == "git" ] ||
+        pkg_verify "$repo_dir" "$pkg"
     done
 
     [ -z ${KISS_ROOT:+x} ]          || log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
@@ -2360,7 +2391,10 @@ pkg_verify() {
     # shellcheck disable=2038,2086
     set -- $hash
 
-    [ -f "$repo_dir/checksums" ] || touch "$repo_dir/checksums"
+    [ -f "$repo_dir/checksums" ] || {
+        : > "$repo_dir/checksums"
+        # printf '%s\n' "$hash" >> "$repo_dir/checksums"
+    }
 
     # Check that the first column (separated by whitespace) match in both
     # checksum files. If any part of either file differs, mismatch. Abort.
@@ -3095,7 +3129,7 @@ pkg_install() {
     local length_index=$((WIDTH_SCOPE - TABSTOP))
 
     IFS_ORIGIN=$IFS
-    IFS=$(printf '%b' "\x3")
+    IFS=$(printf '%b' "\x03")
     [ ! -f "$sys_db/$pkg_name/keys" ] ||
     while IFS=$' ' read -r ver rel repo; do
         null "$ver" || null "$rel" || null "$repo" ||
