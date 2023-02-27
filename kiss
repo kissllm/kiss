@@ -1370,35 +1370,55 @@ download_git() {
     log "$FUNCNAME" '$_des' "$_des"
     mkcd "$FUNCNAME" "$_des"
 
-    local upstream_name=${_purified_res##*[@#]}
+    # Might be empty
+    local upstream_name=
+    [ -n "${_purified_res##*[@\#]*}" ] || upstream_name="${_purified_res##*[@\#]}"
 
-    url="${_purified_res%[#@]*}"
+    url="${_purified_res%[\#@]*}"
 
     log "$FUNCNAME" '$upstream_name' "$upstream_name"
     log "$FUNCNAME" '$url' "${url}"
     log "$FUNCNAME" '$PWD' "$PWD"
 
-    local target=$($@ git ls-remote $url --heads origin "refs/heads/$upstream_name" | awk '{print $2}')
+    local target=
+
+    for item in $($@ git ls-remote $url --heads origin "refs/heads/*" | awk '{print $2}'); do
+        { [ -n "${upstream_name:+x}" ] && [ -z "${item##*"${upstream_name}"*}" ]; } ||
+        [ -z "${item##*"master"*}" ] ||
+        [ -z "${item##*"main"*}" ] || continue
+        target="${item##"refs/heads/"}"
+        break
+    done
+
     local upstream_type
 
     if [ -n "$target" ]; then
-        target="${target##*/}"
         upstream_type="branch"
     else
-        target=$($@ git ls-remote $url --tags origin "refs/tags/$upstream_name" | awk '{print $2}')
-        if [ -n "$target" ]; then
-            target="${target##*/}"
-            upstream_type="tag"
-        else
-            for item in $($@ git ls-remote $url --heads origin "refs/heads/*" | awk '{print $2}'); do
-                [ -n "$item" ] || continue
-                item="${item##*/}"
-                { [ "$item" != "main" ] && [ "$item" != "master" ]; } ||
-                { target="$item"; upstream_type="branch"; break; }
-            done
-        fi
+        upstream_type="tag"
+        for item in $($@ git ls-remote $url --tags origin "refs/tags/*${upstream_name}*" | awk '{print $2}'); do
+            { [ -n "${upstream_name:+x}" ] && [ -z "${item##*"${upstream_name}"*}" ]; } || continue
+            target="${item##"refs/tags/"}"
+            break
+        done
+        [ -n "$target" ] || {
+
+            [ "$($@ git -C "$_des" rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || {
+                $@ find "$_des" -mindepth 1 -delete
+                $@ git clone --recursive --depth 1 "${url}" "$_des" ||
+                    die "$FUNCNAME" "git clone --recursive --depth 1 \"${url}\" \"$_des\"" "failed at $LINENO"
+            }
+            # Time consuming operation
+            # $@ git fetch --all --tags --prune
+            $@ git fetch --tags --prune
+            # https://stackoverflow.com/questions/21439488/find-latest-git-tag-from-the-remote-git-repository
+            # Leaving ^0 at the end of tags
+            # target="$($@ git rev-list --tags --timestamp --no-walk | sort -nr | head -n1 | cut -f 2 -d ' ' | xargs $@ git describe --contains)"
+            # https://stackoverflow.com/questions/1404796/how-can-i-get-the-latest-tag-name-in-current-branch-in-git
+            target="$($@ git describe --tags $($@ git rev-list --tags --max-count=1))"
+        }
         [ -n "$target" ] ||
-        die "$FUNCNAME" "Branch/tag '$upstream_name', 'main', and 'master' doesn't exist." \
+        die "$FUNCNAME" "branch/tag '$upstream_name', 'main', and 'master' doesn't exist." \
         "Specify a valid branch/tag name, please"
     fi
 
@@ -1419,7 +1439,7 @@ download_git() {
             die "$FUNCNAME" "git remote set-url origin \"${url}\"" "failed at $LINENO"
 
 
-        if [ "$upstream_type" = "branch" ]; then
+        if [ "$upstream_type" == "branch" ]; then
 
             [ -z "$target" ] ||
             $@ git remote set-branches origin $target ||
@@ -1433,10 +1453,13 @@ download_git() {
             $@ git fetch --depth 1 origin $target
 
             local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
-            [ "$target" = "$target_ref" ] || {
-                # fatal: a branch named 'master' already exists when "$target" = "$target_ref"
-                $@ git branch $target FETCH_HEAD 2>/dev/null ||         # fatal: a branch named 'master' already exists
-                $@ git checkout -b $target --track origin/$target ||    # fatal: 'origin/aster' is not a commit and a branch 'master' cannot be created from it
+            # fatal: a branch named 'master' already exists when "$target" = "$target_ref"
+            [ "$target" == "$target_ref" ] || {
+                [ "$($@ git branch | grep -v remotes | grep "$target" | awk '{print $1}')" == "$target" ] ||
+                # fatal: a branch named 'master' already exists
+                $@ git branch $target FETCH_HEAD 2>/dev/null ||
+                # fatal: 'origin/aster' is not a commit and a branch 'master' cannot be created from it
+                $@ git checkout -b $target --track origin/$target 2>/dev/null ||
                 die "$FUNCNAME" "git checkout -b $target --track origin/$target" "failed at $LINENO"
 
                 $@ git switch $target 2>/dev/null || $@ git switch -c $target ||    # Already on 'master'
@@ -1447,14 +1470,13 @@ download_git() {
             }
 
             log "$FUNCNAME" '$target_ref' "$target_ref"
-            [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
 
             $@ git branch --set-upstream-to=origin/$target $target
             # fatal: the requested upstream branch 'origin/master' does not exist
             $@ git reset --hard origin/$target ||
                 die "$FUNCNAME" "git reset --hard origin/$target" "failed at $LINENO"
 
-        elif [ "$upstream_type" = "tag" ]; then
+        elif [ "$upstream_type" == "tag" ]; then
 
             local targets=$($@ git tag)
             contains "$targets" "$target" ||
@@ -1466,15 +1488,18 @@ download_git() {
 
             local target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
             [ -z "${target_ref##*${target}*}" ] || {
+                [ "$($@ git branch | grep -v remotes | grep "$target" | awk '{print $1}')" == "$target" ] ||
                 $@ git checkout tags/$target -b $target ||
                 die "$FUNCNAME" "git checkout tags/$target -b $target" "failed at $LINENO"
 
+                $@ git switch $target 2>/dev/null || $@ git switch -c $target ||    # Already on 'master'
+                die "$FUNCNAME" "git switch $target" "failed at $LINENO"
+
                 target_ref=$($@ git branch | grep -v remotes | grep \* | awk '{print $2}')
-                [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
+                [ "$target_ref" == "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
             }
 
             log "$FUNCNAME" '$target_ref' "$target_ref"
-            [ "$target_ref" = "$target" ] || die "$FUNCNAME" " \"$target_ref\" = \"$target\" " "failed at $LINENO"
 
             $@ git reset --hard tags/$target ||
             die "$FUNCNAME" "git reset --hard tags/$target" "failed at $LINENO"
@@ -1488,7 +1513,7 @@ download_git() {
         $@ git submodule sync
         $@ git submodule update --init --remote --recursive --force
     else
-        find "$_des" -mindepth 1 -delete
+        $@ find "$_des" -mindepth 1 -delete
         $@ git clone --recursive --depth 1 --branch $target "${url}" "$_des" ||
             die "$FUNCNAME" "git clone --recursive --depth 1 --branch $target \"${url}\" \"$_des\"" "failed at $LINENO"
     fi
@@ -3528,14 +3553,14 @@ maintain_dir() {
 
         { equ "$target_dir_user" "$root_dir_user" && equ "$target_dir_group" "$root_dir_group"; } || {
             if equ "$target_dir_user" "$root_dir_user"; then
-                $(delegate -- as_user "$target_dir_user") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
-                $(delegate -- as_user "$root_dir_user") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
+                $(delegate -- as_user "$target_dir_user") chgrp -R $root_dir_group "${target_dir}" > /dev/null 2>&1 ||
+                $(delegate -- as_user "$root_dir_user") chgrp -R $root_dir_group "${target_dir}" > /dev/null 2>&1 ||
                 # Hard code root is not good
                 # $(delegate -- as_user "root") chgrp -R $root_dir_group "${target_dir}" 2>&1 ||
                 die "$FUNCNAME" "chgrp ${target_dir}" "failed on $LINENO"
             else
-                $(delegate -- as_user "$target_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
-                $(delegate -- as_user "$root_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+                $(delegate -- as_user "$target_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" > /dev/null 2>&1 ||
+                $(delegate -- as_user "$root_dir_user") chown -R $root_dir_user:$root_dir_group "${target_dir}" > /dev/null 2>&1 ||
                 # Hard code root is not good
                 # $(delegate -- as_user "root") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
                 die "$FUNCNAME" "chown ${target_dir}" "failed on $LINENO"
@@ -3556,8 +3581,8 @@ maintain_dir() {
             log "$FUNCNAME" '$item_user' "$item_user"
 
             log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-            as "$item_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
-            as "$root_dir_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
+            as "$item_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" > /dev/null 2>&1 ||
+            as "$root_dir_user" chown -R $root_dir_user:$root_dir_group "${target_dir}" > /dev/null 2>&1 ||
             # Hard code root is not good
             # $(delegate -- as_user "root") chown -R $root_dir_user:$root_dir_group "${target_dir}" 2>&1 ||
             die "$FUNCNAME" "chown ${target_dir}" "failed on $((LINENO - 3))"
