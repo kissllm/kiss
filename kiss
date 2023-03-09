@@ -25,6 +25,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# Semantics
+# XXX_DIR     : parent address for a package    (like dirname command)
+# XXX_PATH    : full address of a package      (like realpath command)
+# XXX_FOLDER  : parent dir name for a package   (has no path)
+# XXX_ROOT    : root address for packages
+
+# xxx_dir     : parent address for a package (locally / does not export)
+
 # $1 string
 # $2 sub_str
 contains() {
@@ -385,7 +393,8 @@ slot_aquire() {
     local scope="$1"
     log "$FUNCNAME" '$scope' "$scope"
     shift 1
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local src_address="$(standardize "$2")"
     local src_name="${src_address##*/}"
     src_name="${src_name%\?*}"
@@ -443,7 +452,8 @@ slot_push() {
     local scope="$1"
     log "$FUNCNAME" '$scope' "$scope"
     shift 1
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local src_address="$2"
     local src_name="${src_address##*/}"
     src_name="${src_name%\?*}"
@@ -613,7 +623,7 @@ am_owner() {
     # Figure out if we need to change users to operate on
     # a given file or directory.
     path="$(readlink -f "$path")"
-    log "$FUNCNAME" '$path' "$path"
+    debug "$FUNCNAME" '$path' "$path"
     # local inf="$(\ls -ld "$path")" ||
     #     die "$FUNCNAME" "Failed to file information for '$1'"
 
@@ -623,14 +633,14 @@ am_owner() {
     #   die "$FUNCNAME" 'printf' "failed on $LINENO"
 
     local user=$(stat -c '%U' "${path}")
-    log "$FUNCNAME" '$user' "$user"
+    debug "$FUNCNAME" '$user' "$user"
 
     # [ -z "$user_key" ] || eval "$user_key=$user"
     # log "$FUNCNAME" '$user_key' "$user_key"
     # log "$FUNCNAME" '$(eval echo \$$user_key)' "$(eval echo \$$user_key)"
 
     local group=$(stat -c '%G' "${path}")
-    log "$FUNCNAME" '$group' "$group"
+    debug "$FUNCNAME" '$group' "$group"
     # [ -z "$group_key" ] || eval "$group_key=$group"
     # log "$FUNCNAME" '$group_key' "$group_key"
     # log "$FUNCNAME" '$(eval echo \$$group_key)' "$(eval echo \$$group_key)"
@@ -643,8 +653,10 @@ am_owner() {
 as() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local user_name="$1"
-    log "$FUNCNAME" "Using '$cmd_su' (to become $user_name)"
+    [ "$#" -ge "1" ] || die "$FUNCNAME" '$user_name' "$user_name"
     shift 1
+
+    log "$FUNCNAME" "Using '$cmd_su'" "to become $user_name"
 
     case ${cmd_su##*/} in
         su) $cmd_su -c $* <&3 $user_name 3<&0 </dev/tty ;;
@@ -652,12 +664,43 @@ as() {
     esac
 }
 
+as_dir() {
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local path="$1"
+    [ "$#" -ge "1" ] || die "$FUNCNAME" '$path' "$path"
+    shift 1
+    local real_path="$(readlink -f "$path")"
+    local user_name="$(stat -c '%U' "$real_path")"
+    log "$FUNCNAME" "Using '$cmd_su'" "to become $user_name"
+
+    case ${cmd_su##*/} in
+        su) $cmd_su -c $* <&3 $user_name 3<&0 </dev/tty ;;
+         *) $cmd_su -u $user_name -- $@
+    esac
+}
+
+as_dir_owner() {
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local path="$1"
+    [ "$#" -ge "1" ] || die "$FUNCNAME" '$path' "$path"
+    shift 1
+    local real_path="$(readlink -f "$path")"
+    local user_name="$(stat -c '%U' "$real_path")"
+    log "$FUNCNAME" "Using '$cmd_su'" "to become $user_name"
+
+    case ${cmd_su##*/} in
+        su) printf '\n%s' "$cmd_su -c $* <&3 $user_name 3<&0 </dev/tty" ;;
+         *) printf '\n%s' "$cmd_su -u $user_name -- $@"
+    esac
+}
+
 # $1 user_name
 as_user() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local user_name="$1"
-    log "$FUNCNAME" "Using '$cmd_su' (to become $user_name)"
+    [ "$#" -ge "1" ] || die "$FUNCNAME" '$user_name' "$user_name"
     shift 1
+    log "$FUNCNAME" "Using '$cmd_su'" "to become $user_name"
 
     case ${cmd_su##*/} in
         su) printf '\n%s' "$cmd_su -c $* <&3 $user_name 3<&0 </dev/tty" ;;
@@ -716,7 +759,8 @@ run_hook() {
 run_hook_pkg() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local command="$1"
-    local pkg_name="$2"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local repo_target="$sys_db/$pkg_name"
     # Run a hook from the package's database files.
     if [ -x "$repo_target/$command" ]; then
@@ -814,7 +858,9 @@ pkg_version() {
     debug "$FUNCNAME" '$scope' "$scope"
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     shift 1
-    local pkg_name="$1"
+    local repo_url="$1"
+    local repo_path="$(delegate -- "pkg_find" "$@")"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ "repo_path"
     debug "$FUNCNAME" '$pkg_name' "$pkg_name"
     local list="$2"
     local shell_flag="$3"
@@ -824,21 +870,20 @@ pkg_version() {
     local ver_pre=$repo_ver
     local rel_pre=$repo_rel
 
-    local repo_dir="$(delegate -- "pkg_find" "$@")"
-    if [ -d "$repo_dir" ]; then
-        debug "$FUNCNAME" '$repo_dir' "$repo_dir"
+    if [ -d "$repo_path" ]; then
+        debug "$FUNCNAME" '$repo_path' "$repo_path"
     else
-        die "$FUNCNAME" '$repo_dir' "No such package ($pkg_name)"
+        die "$FUNCNAME" '$repo_path' "No such package ($pkg_name)"
     fi
 
-    IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_dir/version" ||
-        die "$FUNCNAME" "$pkg_name" "Failed to read version file ($repo_dir/version)"
+    IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_path/version" ||
+        die "$FUNCNAME" "$pkg_name" "Failed to read version file ($repo_path/version)"
 
     ok "$repo_rel" ||
         die "$FUNCNAME" "$pkg_name" "Release field not found in version file"
 
     # This belongs somewhere else, for now it can live here.
-    [ -x "$repo_dir/build" ] ||
+    [ -x "$repo_path/build" ] ||
         die "$FUNCNAME" "$pkg_name" "Build file not found or not executable"
 
     debug "$FUNCNAME" '$ver_pre'  "$ver_pre"
@@ -847,15 +892,17 @@ pkg_version() {
     debug "$FUNCNAME" '$repo_rel' "$repo_rel"
 
     printf '%s\3%s\3%s\3%s\3%s\n' \
-        "$repo_dir" "$ver_pre" "$rel_pre" "$repo_ver" "$repo_rel"
+        "$repo_path" "$ver_pre" "$rel_pre" "$repo_ver" "$repo_rel"
 
 }
 
 # Package version of $sys_db
 version_installed() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name
-    if ok "$1"; then pkg_name="$1"; else pkg_name="kiss"; fi
+    local repo_url
+    if ok "$1"; then repo_url="$1"; else repo_url="kiss"; fi
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
+
     IFS=$'\3' read -r _ _ _ repo_ver repo_rel \
         < <(pkg_version "$FUNCNAME" "$pkg_name" "" "" "$sys_db") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
@@ -868,7 +915,8 @@ version_installed() {
 # $3 -d / -x
 # $4 $KISS_PATH / $sys_db / $PATH
 pkg_version_split() {
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     debug "$FUNCNAME" '$pkg_name' "$pkg_name"
     local list="$2"
     local shell_flag="$3"
@@ -878,10 +926,10 @@ pkg_version_split() {
     trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # https://stackoverflow.com/questions/2488715/idioms-for-returning-multiple-values-in-shell-scripting
-    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel \
+    IFS=$'\3' read -r repo_path _ _ repo_ver repo_rel \
         < <(pkg_version "$FUNCNAME" "$pkg_name" "$list" "$shell_flag" "$search_path") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-    null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
+    null "$repo_path" && die "$FUNCNAME" '$repo_path' "$repo_path"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
     null "$repo_rel" && die "$FUNCNAME" '$repo_rel' "$repo_rel"
     debug "$FUNCNAME" '$repo_ver' "$repo_ver"
@@ -891,16 +939,15 @@ pkg_version_split() {
         < <(printf "$repo_ver\n") > /dev/null ||
         die "$FUNCNAME" 'printf' "failed on $LINENO"
 
-    [ $? -eq 0 ] && {
-        debug "$FUNCNAME" '$repo_dir' "$repo_dir"
-        debug "$FUNCNAME" '$repo_major' "$repo_major"
-        debug "$FUNCNAME" '$repo_minor' "$repo_minor"
-        debug "$FUNCNAME" '$repo_patch' "$repo_patch"
-        # [ -z ${repo_ident} ] && repo_ident="0"
-        debug "$FUNCNAME" '$repo_ident' "$repo_ident"
-    }
+    debug "$FUNCNAME" '$repo_path' "$repo_path"
+    debug "$FUNCNAME" '$repo_major' "$repo_major"
+    debug "$FUNCNAME" '$repo_minor' "$repo_minor"
+    debug "$FUNCNAME" '$repo_patch' "$repo_patch"
+    # [ -n ${repo_ident} ] || repo_ident="0"
+    debug "$FUNCNAME" '$repo_ident' "$repo_ident"
+
     printf '%s\3%s\3%s\3%s\3%s\3%s\3%s\n' \
-        "$repo_dir" "$repo_ver" "$repo_rel" "$repo_major" "$repo_minor" "$repo_patch" "$repo_ident"
+        "$repo_path" "$repo_ver" "$repo_rel" "$repo_major" "$repo_minor" "$repo_patch" "$repo_ident"
 
 }
 
@@ -914,16 +961,19 @@ pkg_pick_up() {
     action_of_session="pick"
     local index=0
 
-    local pkg_name
+    local repo_url
     local repo_list
     local index_pick_up=
 
     if ok "$1"; then
-        pkg_name="${1}"
+        repo_url="${1}"
+        repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
+        log "$FUNCNAME" '$pkg_name' "$pkg_name"
         repo_list="$(find "$REPO_ROOT" \( -type d -o -type l \) -name "${pkg_name}")"
         null "$2" || index_pick_up="${2}"
     else
-        pkg_name="${PWD##*/}"
+        repo_url="${PWD##*/}"
+        repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
         repo_list="${PWD}"
         index_pick_up="$index"
     fi
@@ -995,54 +1045,56 @@ pkg_pick_up() {
     unset route
     c2="$c2_origin"
 
-    local repo_dir_parent="${repo_selected%/*}"
+    local repo_path="${repo_selected%/*}"
     local pkg_selected="${repo_selected##*/}"
 
-    log "$FUNCNAME" '$repo_dir_parent' "$repo_dir_parent"
+    log "$FUNCNAME" '$repo_path' "$repo_path"
     log "$FUNCNAME" '$pkg_selected' "$pkg_selected"
 
     pkg_dirs "$action_of_session" "$pkg_selected"
 
-    export KISS_PATH=$repo_dir_parent
+    export KISS_PATH=$repo_path
 
     { hint "$FUNCNAME" 'pkg_checksum' "$pkg_selected"; action="checksum"; ! pkg_checksum  "$pkg_selected" 2>&1 > /dev/stderr; } ||
     { hint "$FUNCNAME" 'pkg_build_all' "$pkg_selected"; action="build"; ! pkg_build_all "$pkg_selected" 2>&1 > /dev/stderr; } || {
         hint "$FUNCNAME" 'pkg_install' "$pkg_selected"
         if ! equ "$LOGNAME" "$kiss_root_user"; then
-            log "$FUNCNAME" '$repo_dir_parent' "$repo_dir_parent"
-            subshell_action_all "install" "$repo_dir_parent/$pkg_selected"
+            log "$FUNCNAME" '$repo_path' "$repo_path"
+            subshell_action_all "install" "$repo_path/$pkg_selected"
         else
-            log "$FUNCNAME" '$repo_dir_parent' "$repo_dir_parent"
-            action="install"; pkg_install "$repo_dir_parent/$pkg_selected" 2>&1 > /dev/stderr
+            log "$FUNCNAME" '$repo_path' "$repo_path"
+            action="install"; pkg_install "$repo_path/$pkg_selected" 2>&1 > /dev/stderr
         fi
     }
 }
 
-# Figure out which repository a package belongs to (repo_dir)
+# Figure out which repository a package belongs to (repo_path)
 # or print applications in $PATH (app_path)
-# $1 pkg_url
+# $1 repo_url
 # $2 list option: "all" for repositories and "" for the 1st repository
 # $3 shell flag: -d / -x
 # $4 $KISS_PATH / $sys_db / $PATH. Don't have pkg_name
-# $5 result(s)
 pkg_find() {
     set -eE
     trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     debug "$FUNCNAME" 'enter'
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    debug "$FUNCNAME" '$pkg_url' "$pkg_url [global]"
+    debug "$FUNCNAME" '$repo_url' "$repo_url [global]"
 
     # Figure out which repository a package belongs to by searching for
     # directories matching the package name in $KISS_PATH/*.
     set -- "$1" "$2" "$3" "${4:-"$KISS_PATH"}"
-    local pkg_url="$1"
+
+    local repo_url="$1"
     local list="$2"
-    ok "$list" || pkg_url="$(standardize "$pkg_url")" # pkg_url=${pkg_url%%\*}
-    debug "$FUNCNAME " '$pkg_url' "$pkg_url [local]"
-    local pkg_name="${pkg_url##*/}"
+    ok "$list" || repo_url="$(standardize "$repo_url")" # repo_url=${repo_url%%\*}
+    debug "$FUNCNAME " '$repo_url' "$repo_url [local]"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     debug "$FUNCNAME " '$pkg_name' "$pkg_name [local]"
     local test_key="$3"
     local search_paths="$4"
+    local repo_path=
+
     debug "$FUNCNAME" '$#' "$#"
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
 
@@ -1054,7 +1106,7 @@ pkg_find() {
     # Intentional.
     # shellcheck disable=2086
     for _found_path in $search_paths $sys_db; do
-        debug "$FUNCNAME" '$pkg_url' "$pkg_url"
+        debug "$FUNCNAME" '$repo_url' "$repo_url"
         debug "$FUNCNAME" '$pkg_name' "$pkg_name"
         null "$_found_path" || {
             _found_path="$(standardize "$_found_path")"
@@ -1093,28 +1145,23 @@ pkg_find() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     debug "$FUNCNAME" '$list-$#' "$list-$#"
 
-    null "$repo_dir" || debug "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
-
     # Figure out which repository a package belongs to by searching for
     # Show all search results if called from 'kiss search', else store the
     # values in variables. If there are 4 arguments, no package has been found.
-    local result=
     case $list-$# in
         *-4) ;;
         -*) # null "$list"
-            repo_dir="$(standardize "$5")"
-            result="$repo_dir"
-            pkg_name="${5##*/}"
-            debug "$FUNCNAME" '$repo_dir' "$repo_dir"
+            repo_path="$(standardize "$5")"
+            debug "$FUNCNAME" '$repo_path' "$repo_path"
             ;;
         *)  # ok "$list"
             shift 4;
             for item in $@; do
-                result="${result:+"${result} "}$item"
+                repo_path="${repo_path:+"${repo_path} "}$item"
             done
-            debug "$FUNCNAME" '$applications' "$result"
+            debug "$FUNCNAME" '$applications' "$repo_path"
     esac
-    printf '\n%s' "$result"
+    printf '\n%s' "$repo_path"
 }
 
 pkg_list_version() {
@@ -1137,11 +1184,9 @@ pkg_list_version() {
     for pkg_name do
         debug "$FUNCNAME" '$pkg_name'       "$pkg_name"
         debug "$FUNCNAME" '${pkg_name##*/}' "${pkg_name##*/}"
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        IFS=$'\3' read -r repo_path ver_pre rel_pre repo_ver repo_rel \
             < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db") \
             > /dev/null || die "$FUNCNAME" '$pkg_version' "failed on $LINENO"
-        null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
-        null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
         log "$FUNCNAME" "${pkg_name##*/}" "$repo_ver-$repo_rel"
     done
 }
@@ -1155,18 +1200,17 @@ pkg_cache() {
     trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local arguents="$@"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     null "$2" || debug "$FUNCNAME" '$2' "$2"
     log "$FUNCNAME" '$bin_dir' "$bin_dir"
 
     # Find the tarball of a package using a glob. Use the user's set compression
     # method if found or first match of the below glob.
 
-    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+    IFS=$'\3' read -r repo_path ver_pre rel_pre repo_ver repo_rel \
         < <(pkg_version "$FUNCNAME" "$pkg_name") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-    null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
-    null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
 
     log "$FUNCNAME" '$repo_ver' "$repo_ver"
     log "$FUNCNAME" '$repo_rel' "$repo_rel"
@@ -1213,7 +1257,8 @@ pkg_cache() {
 # _des_dir  : target file location, directory destination
 source_route() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local src_url="$2"
     local dest="$3"
     local action="$4"
@@ -1224,16 +1269,15 @@ source_route() {
         return 0
     }
 
-    IFS=$'\3' read -r repo_dir _ _ repo_ver repo_rel \
+    IFS=$'\3' read -r repo_path _ _ repo_ver repo_rel \
         < <(pkg_version "$FUNCNAME" "$pkg_name") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-    ok "$repo_dir" || die "$FUNCNAME" '$repo_dir' "$repo_dir"
-    ok "$repo_ver" || die "$FUNCNAME" '$repo_ver' "$repo_ver"
-    IFS=$'\3' read -r repo_dir repo_ver repo_rel \
+    IFS=$'\3' read -r _ repo_ver repo_rel \
         repo_major repo_minor repo_patch repo_ident \
         < <(pkg_version_split "$pkg_name") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-    ok "$repo_dir" || die "$FUNCNAME" '$repo_dir' "$repo_dir"
+
+    ok "$repo_path" || die "$FUNCNAME" '$repo_path' "$repo_path"
     log "$FUNCNAME" '$repo_major' "$repo_major"
     log "$FUNCNAME" '$repo_minor' "$repo_minor"
     log "$FUNCNAME" '$repo_patch' "$repo_patch"
@@ -1257,7 +1301,7 @@ source_route() {
 
     log "$FUNCNAME" '$_fnr(uri)' "$_fnr"
 
-    set -- "$1" "$_fnr" "${3%"${3##*[!/]}"}" "$4"
+    set -- "$pkg_name" "$_fnr" "${3%"${3##*[!/]}"}" "$4"
 
     pkg_name="$1"
     src_url="$2"
@@ -1294,29 +1338,29 @@ source_route() {
     # Git repository.
     if null "${src_url##git+*}"; then
         _res=$src_url
-        # _des_dir=$src_root/$pkg_name/${dest:-"$src_name"}
+        # _des_dir=$src_dir/$pkg_name/${dest:-"$src_name"}
         # _des_dir=${_des_dir%[@#]*}/.
-        _des_dir=$src_root/$pkg_name/${dest:+"$dest/"}.
+        _des_dir=$src_dir/$pkg_name/${dest:+"$dest/"}.
 
     # How to judge the content under src's subfolder is valid?
     # # Remote source dir (cached).
-    # elif [ -d "$src_root/$pkg_name/${dest:+"$dest/"}$src_current" ]; then
-    #     _res=$src_root/$pkg_name/${dest:+"$dest/"}$src_current
-    #     _des_dir=$src_root/$pkg_name/${dest:+"$dest/"}$src_current
+    # elif [ -d "$src_dir/$pkg_name/${dest:+"$dest/"}$src_current" ]; then
+    #     _res=$src_dir/$pkg_name/${dest:+"$dest/"}$src_current
+    #     _des_dir=$src_dir/$pkg_name/${dest:+"$dest/"}$src_current
 
     # Remote source files (cached).
-    elif [ -f "$archive_root/$pkg_name/${dest:+"$dest/"}$src_name" ]; then
-        _res=$archive_root/$pkg_name/${dest:+"$dest/"}$src_name
-        _des_dir=$src_root/$pkg_name/${dest:+"$dest/"}.
+    elif [ -f "$archive_path/$pkg_name/${dest:+"$dest/"}$src_name" ]; then
+        _res=$archive_path/$pkg_name/${dest:+"$dest/"}$src_name
+        _des_dir=$src_dir/$pkg_name/${dest:+"$dest/"}.
 
     # Remote source archive/files.
     elif null "${src_url##*://*}"; then
         _res=url+$src_url
-        _des_dir=$archive_root/$pkg_name/${dest:+"$dest/"}.
+        _des_dir=$archive_path/$pkg_name/${dest:+"$dest/"}.
 
     # Local relative dir.
-    elif [ -d "$repo_dir/$src_url" ]; then
-        _res=$repo_dir/$src_url/.
+    elif [ -d "$repo_path/$src_url" ]; then
+        _res=$repo_path/$src_url/.
         _des_dir=$_res
 
     # Local absolute dir.
@@ -1324,9 +1368,9 @@ source_route() {
         _res=/${src_url##/}/.
         _des_dir=$_res
 
-    # Local relative file (/repo_dir/files/filename).
-    elif [ -f "$repo_dir/$src_url" ]; then
-        _res=$repo_dir/$src_url
+    # Local relative file (/repo_path/files/filename).
+    elif [ -f "$repo_path/$src_url" ]; then
+        _res=$repo_path/$src_url
         _des_dir="${_res%/*}/."
 
     # Local absolute file (/files/filename).
@@ -1352,23 +1396,23 @@ source_route() {
 # $2 action    : action name
 pkg_download() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local action="$2"
     log "$FUNCNAME" '$pkg_name' "$pkg_name"
     log "$FUNCNAME" '$action'   "$action"
-    IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
+    IFS=$'\3' read -r repo_path repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
         < <(pkg_version_split "$pkg_name") > /dev/null ||
         die "$FUNCNAME" 'pkg_version_split' "failed on $LINENO"
-    [ "$?" -ne 0 ] || {
-        log "$FUNCNAME" '$repo_dir'   "$repo_dir"
-        log "$FUNCNAME" '$repo_major' "$repo_major"
-        log "$FUNCNAME" '$repo_minor' "$repo_minor"
-        log "$FUNCNAME" '$repo_patch' "$repo_patch"
-        log "$FUNCNAME" '$repo_ident' "$repo_ident"
-    }
+
+    log "$FUNCNAME" '$repo_path'   "$repo_path"
+    log "$FUNCNAME" '$repo_major' "$repo_major"
+    log "$FUNCNAME" '$repo_minor' "$repo_minor"
+    log "$FUNCNAME" '$repo_patch' "$repo_patch"
+    log "$FUNCNAME" '$repo_ident' "$repo_ident"
 
     # Support packages without sources. Simply do nothing.
-    [ -f "$repo_dir/sources" ] || return 0
+    [ -f "$repo_path/sources" ] || return 0
 
     log "$FUNCNAME" "$pkg_name" "Reading sources"
 
@@ -1402,12 +1446,13 @@ pkg_download() {
         # arg3: verbatim source
         # arg4: resolved source
         run_hook post-source "$pkg_name" "$src_url" "${_des_dir:-"$_res"}"
-    done < "$repo_dir/sources"
+    done < "$repo_path/sources"
 }
 
 download_url() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     shift 1
     local _des_dir="$1"
     local _res_purified="$2"
@@ -1432,7 +1477,7 @@ download_url() {
     # /usr/bin/kiss: line 1198: -o: not found
     local as_archive_user=
     IFS=$'\3' read -r archive_dir_user _  \
-        < <(am_owner "$archive_root/$pkg_name") > /dev/null ||
+        < <(am_owner "$archive_path/$pkg_name") > /dev/null ||
         die "$FUNCNAME" 'am_owner' "failed on $LINENO"
     equ "$LOGNAME" "$archive_dir_user" || as_archive_user=$(delegate -- as_user "$archive_dir_user")
 
@@ -1449,18 +1494,19 @@ download_git() {
     set -eE
     trap 'trace_line "$FUNCNAME" "$LINENO"' ERR
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     shift 1
     local _des_dir="$1"
     local _res_purified="$2"
 
-    log "$FUNCNAME" '$src_root' "$src_root"
+    log "$FUNCNAME" '$src_dir' "$src_dir"
     log "$FUNCNAME" '$src_user' "$src_user"
 
     set --
     equ "$LOGNAME" "$src_user" || set -- $(delegate -- as_user "$src_user")
 
-    log "$FUNCNAME" '$_des_dir' "$_des_dir" # "$src_root/$pkg_name/${dest:+"$dest/"}."
+    log "$FUNCNAME" '$_des_dir' "$_des_dir" # "$src_dir/$pkg_name/${dest:+"$dest/"}."
     # Remove "/."
     [ "${_des_dir##*/}" != "." ] || _des_dir="${_des_dir%/*}"
     log "$FUNCNAME" '$_des_dir' "$_des_dir"
@@ -1627,7 +1673,8 @@ download_git() {
 # working under "${_des_dir%/*}"
 extract_tar() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     shift 1
     local _des_dir="$1"
     local _res="$2"
@@ -1698,11 +1745,13 @@ extract_tar() {
 # $1 pkg_name
 pkg_to_make_dir() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_path="$1"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     # Extract all source archives to the build directory and copy over any
     # local repository files.
     #
-    # NOTE: repo_dir comes from caller.
+    # NOTE: repo_path comes from caller.
     log "$FUNCNAME" "$pkg_name" "Extracting sources"
 
     # arg1: pre-extract
@@ -1738,7 +1787,7 @@ pkg_to_make_dir() {
                 cp -LRf "$_res" .
             ;;
         esac
-    done < "$repo_dir/sources" || die "$FUNCNAME" "$pkg_name" "Failed to extract $_res"
+    done < "$repo_path/sources" || die "$FUNCNAME" "$pkg_name" "Failed to extract $_res"
 }
 
 # $1 pkg_name   : dependence with repo path
@@ -1748,7 +1797,10 @@ pkg_to_make_dir() {
 # $5 dep_stage  : dependent type/stage [build time / runtime]
 pkg_depends() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local makedeps="$1"
+    shift 1
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local policy="$2"
     local filter="$3"
     local appended="$4"
@@ -1784,20 +1836,20 @@ pkg_depends() {
         die "$FUNCNAME" "$pkg_name <> ${4##* }" "circular dependency detected"
     esac
 
-    local repo_dir="$repo_target"
+    local repo_path="$repo_target"
     [ -d "$repo_target" ] ||
-        repo_dir="$(delegate -- "pkg_find" "$pkg_name")"
+        repo_path="$(delegate -- "pkg_find" "$pkg_name")"
 
-    ok "$repo_dir" || die "$FUNCNAME" "$pkg_name" 'is not yet installed'
+    ok "$repo_path" || die "$FUNCNAME" "$pkg_name" 'is not yet installed'
 
-    log "$FUNCNAME" '$repo_dir' "$repo_dir"
+    log "$FUNCNAME" '$repo_path' "$repo_path"
     log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
     log "$FUNCNAME" '$4' "$4"
     log "$FUNCNAME" '$appended' "$appended"
 
     # Packages which exist and have depends.
     null "$(delegate -- "pkg_find" "$pkg_name")" ||
-    [ ! -e "$repo_dir/depends" ] ||
+    [ ! -e "$repo_path/depends" ] ||
     # Recurse through the dependencies of the child packages.
     while read -r dep dep_type || ok "$dep"; do
         log "$FUNCNAME" '$dep' "$dep"
@@ -1805,14 +1857,14 @@ pkg_depends() {
 
         null ${dep##*/*} ||
         contains "$appended" "$pkg_name" || {
-            { ok "${dep##\#*}" && [ -n ${KISS_ROOT:+x} ]; } ||
-                pkg_depends "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
-            { [ -z ${KISS_ROOT:+x} ] || ok "$dep_type"; } ||
-                pkg_depends "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
-            { [ -z ${KISS_ROOT:+x} ] || null "$dep_type"; } ||
-                pkg_make_depends "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
+            null "${dep##\#*}" || [ -n ${KISS_ROOT:+x} ] ||
+                pkg_depends "makedeps" "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
+            [ -z ${KISS_ROOT:+x} ] || ok "$dep_type" ||
+                pkg_depends "makedeps" "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
+            [ -z ${KISS_ROOT:+x} ] || null "$dep_type" ||
+                make_depends "makedeps" "$dep" '' "$filter" "$4 $pkg_name" "$dep_type"
         }
-    done < "$repo_dir/depends" || :
+    done < "$repo_path/depends" || :
 
     # Add parent to dependencies list.
     equ "$policy" expl && { ! equ "$dep_stage" make || ok "$(delegate -- "pkg_cache" "$pkg_name")"; } ||
@@ -1823,17 +1875,21 @@ pkg_depends() {
     done
 }
 
-pkg_make_depends() {
+make_depends() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local makedeps_name="$1"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
+    eval "local makedeps_value=\$$makedeps_name"
     # Only add to list once
-    ! contains "$makedeps" "$pkg_name" || return 0
+    ! contains "$makedeps_value" "$pkg_name" || return 0
 
     # Filter already installed packages on build machine.
-    ! [ -d "$REPO_ROOT/installed/$pkg_name" ] || return 0
+    [ ! -d "$REPO_ROOT/installed/$pkg_name" ] || return 0
 
     # Add to the list
-    makedeps="$makedeps $pkg_name"
+    makedeps_value="${makedeps_value:+"${makedeps_value} "}$pkg_name"
+    eval "$makedeps_name=$makedeps_value"
 }
 
 # "$@" : all packages
@@ -1848,7 +1904,7 @@ pkg_order() {
       /*@*.tar.*) deps="$deps $pkg_name" ;;
        *@*.tar.*) deps="$deps $ppwd/$pkg_name" ;;
              */*) die "$FUNCNAME" "Not a package' ($pkg_name)" ;;
-               *) pkg_depends "$pkg_name" raw
+               *) pkg_depends "makedeps" "$pkg_name" raw
     esac done
 
     for item in $deps; do
@@ -1925,7 +1981,8 @@ pkg_strip() {
 # $1 pkg_name : repository name / package name
 pkg_fix_deps() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     # Dynamically look for missing runtime dependencies by checking each
     # binary and library with 'ldd'. This catches any extra libraries and or
     # dependencies pulled in by the package's build suite.
@@ -2058,7 +2115,8 @@ pkg_fix_deps() {
 # $2 pkg_dir/$pkg_name / tar_dir/$pkg_name  : package directory / extracting directory
 pkg_manifest() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local dir_operating="$2"
     # Generate the package's manifest file. This is a list of each file
     # and directory inside the package. The file is used when uninstalling
@@ -2095,7 +2153,8 @@ pkg_manifest() {
 manifest_validate() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # NOTE: pkg_name comes from caller.
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     log "$FUNCNAME" "$pkg_name" "Checking if manifest valid"
 
     log "$FUNCNAME" '$tar_dir/$pkg_name' "$tar_dir/$pkg_name"
@@ -2136,7 +2195,8 @@ manifest_replace() {
 # $@ :
 pkg_etcsums() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     # Generate checksums for each configuration file in the package's /etc/
     # directory for use in "smart" handling of these files.
     log "$FUNCNAME" "$pkg_name" "Generating etcsums"
@@ -2157,7 +2217,8 @@ pkg_etcsums() {
 pkg_tar() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     log "$FUNCNAME" '$pkg_name' "$pkg_name [global]"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     log "$FUNCNAME" '$pkg_name' "$pkg_name [local]"
 
     # Create a tarball from the built package's files. This tarball also
@@ -2167,10 +2228,10 @@ pkg_tar() {
     log "$FUNCNAME" "$pkg_name" "tarball creating"
     # tree "$pkg_dir"
 
-    IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+    IFS=$'\3' read -r repo_path ver_pre rel_pre repo_ver repo_rel \
         < <(pkg_version "$FUNCNAME" "$pkg_name") > /dev/null ||
             die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-    null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
+    null "$repo_path" && die "$FUNCNAME" '$repo_path' "$repo_path"
     null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
     local tar_file=$bin_dir/$pkg_name/$pkg_name@$repo_ver-$repo_rel.tar.$KISS_COMPRESS
     local repofile="repo.index"
@@ -2223,7 +2284,7 @@ pkg_build_all() {
     # Also resolve dependencies for all explicit packages.
     for pkg_name do
         pkg_dirs "$action" "$pkg_name"
-        pkg_depends "$pkg_name" expl filter
+        pkg_depends "makedeps" "$pkg_name" expl filter
         explicit="$explicit $pkg_name "
     done
 
@@ -2274,12 +2335,12 @@ pkg_build_all() {
 
     for pkg_name do
         pkg_download "$pkg_name"
-        local repo_dir="$(delegate -- "pkg_find" "$pkg_name")"
-        IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_dir/version" ||
-        die "$FUNCNAME" "$pkg_name" "Failed to read version file ($repo_dir/version)"
-        [ ! -f "$repo_dir/sources" ] ||
+        local repo_path="$(delegate -- "pkg_find" "$pkg_name")"
+        IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_path/version" ||
+        die "$FUNCNAME" "$pkg_name" "Failed to read version file ($repo_path/version)"
+        [ ! -f "$repo_path/sources" ] ||
         [ "$repo_ver" == "git" ] ||
-        pkg_verify "$repo_dir" "$pkg_name"
+        pkg_verify "$repo_path" "$pkg_name"
     done
 
     [ -z ${KISS_ROOT:+x} ]          || log "$FUNCNAME" '$KISS_ROOT' "$KISS_ROOT"
@@ -2300,11 +2361,11 @@ pkg_build_all() {
     for pkg_name do
         log "$FUNCNAME" "$pkg_name" "Building package ($((_build_cur+=1))/$#)"
 
-        log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
-        IFS=$'\3' read -r repo_dir repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
+        log "$FUNCNAME" '$repo_path' "$repo_path [global]"
+        IFS=$'\3' read -r repo_path repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
             < <(pkg_version_split "$pkg_name") > /dev/null ||
             die "$FUNCNAME" 'pkg_version_split' "failed on $LINENO"
-        null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
+        null "$repo_path" && die "$FUNCNAME" '$repo_path' "$repo_path"
 
         # arg1: queue-status
         # arg2: package name
@@ -2312,9 +2373,9 @@ pkg_build_all() {
         # arg4: total in queue
         run_hook queue "$pkg_name" "$_build_cur" "$#"
 
-        log "$FUNCNAME" '$repo_dir' "$repo_dir [local]"
-        null "$repo_dir" && die "$FUNCNAME" '' "\$repo_dir not found [local]"
-        [ ! -f "$repo_dir/sources" ] || pkg_to_make_dir "$pkg_name"
+        log "$FUNCNAME" '$repo_path' "$repo_path [local]"
+        null "$repo_path" && die "$FUNCNAME" '' "\$repo_path not found [local]"
+        [ ! -f "$repo_path/sources" ] || pkg_to_make_dir "$repo_path" "$pkg_name"
 
         log "$FUNCNAME" '$db'  "$db"
         log "$FUNCNAME" '$PWD' "$PWD"
@@ -2346,7 +2407,10 @@ pkg_build_all() {
 # $1 pkg_name
 pkg_build() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" "repo_dir" "repo_path"
+    # local repo_path="$(delegate -- "pkg_find" "$pkg_name")"
+    ok "$repo_path" || die "$FUNCNAME" '$repo_path' "$repo_path"
     # Install built packages to a directory under the package name to
     # avoid collisions with other packages.
 
@@ -2356,13 +2420,9 @@ pkg_build() {
     log "$FUNCNAME" '$proc_root/$pkg_name' "$proc_root/$pkg_name"
     log "$FUNCNAME" '$make_dir/$pkg_name' "$make_dir/$pkg_name"
     log "$FUNCNAME" '$repo_ver' "$repo_ver"
-    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
+    log "$FUNCNAME" '$repo_path' "$repo_path [global]"
 
-    local repo_dir="$(delegate -- "pkg_find" "$pkg_name")"
-
-    ok "$repo_dir" || die "$FUNCNAME" '$repo_dir' "$repo_dir"
-
-    log "$FUNCNAME" '$repo_dir'    "$repo_dir [local]"
+    log "$FUNCNAME" '$repo_path'    "$repo_path [local]"
     log "$FUNCNAME" '$pkg_name'    "$pkg_name"
     log "$FUNCNAME" '$db'          "$db"
     log "$FUNCNAME" '$LOGNAME'     "$LOGNAME"
@@ -2426,13 +2486,13 @@ pkg_build() {
             KISS_XBUILD_ABI="$KISS_XBUILD_ABI" \
             KISS_XHOST_TRIPLE="$KISS_XHOST_ARCH-linux-$KISS_XHOST_ABI" \
             KISS_XBUILD_TRIPLE="$KISS_XBUILD_ARCH-linux-$KISS_XBUILD_ABI" \
-            SRCDIR="$src_root/$pkg_name" \
-            LOGDIR="$log_dir" \
-            REPODIR="$repo_dir/$pkg_name" \
-            MAKEDIR="$make_dir/$pkg_name" \
+            SRC_DIR="$src_dir" \
+            LOG_DIR="$log_dir" \
+            REPO_DIR="$repo_dir" \
+            MAKE_DIR="$make_dir" \
             DESTDIR="$pkg_dir/$pkg_name" \
             \
-            "$repo_dir/build" "$pkg_dir/$pkg_name" "$repo_ver" 2>&1 || {
+            "$repo_path/build" "$pkg_dir/$pkg_name" "$repo_ver" 2>&1 || {
             log "$FUNCNAME" "$pkg_name" "Build failed"
             log "$FUNCNAME" "$pkg_name" "If hardcoded doas/sudo/su/ssu, it is not recommended)"
             log "$FUNCNAME" "$pkg_name" "Log stored to $log_dir/build.log"
@@ -2452,7 +2512,7 @@ pkg_build() {
     # equ "$KISS_KEEPLOG" 1 || rm -f "$log_dir/$pkg_name/build.log"
 
     # Copy the repository files to the package directory.
-    as "$src_user" /usr/bin/cp -LRf "$repo_dir" "$pkg_dir/$pkg_name/$db/"
+    as "$src_user" /usr/bin/cp -LRf "$repo_path" "$pkg_dir/$pkg_name/$db/"
 
     log "$FUNCNAME" "$pkg_name" "Successfully built package"
 
@@ -2464,12 +2524,13 @@ pkg_build() {
 
 pkg_checksum() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
 
     pkg_download "$pkg_name" c
 
-    log "$FUNCNAME" '$repo_dir' "$repo_dir"
-    [ -f "$repo_dir/sources" ] || return 0
+    log "$FUNCNAME" '$repo_path' "$repo_path"
+    [ -f "$repo_path/sources" ] || return 0
 
     local hash="$(delegate -- "pkg_checksum_gen" "$pkg_name")"
 
@@ -2477,7 +2538,7 @@ pkg_checksum() {
         local as_kiss_root_usr=
         [ "$(whoami)" == "$kiss_root_user" ] || as_kiss_root_usr="$(delegate -- as_user "$kiss_root_user")"
         log "$FUNCNAME" '$as_kiss_root_usr' "$as_kiss_root_usr"
-        $as_kiss_root_usr sh -c '/usr/bin/printf "%s\n" "$hash" > "$repo_dir/checksums"'
+        $as_kiss_root_usr sh -c '/usr/bin/printf "%s\n" "$hash" > "$repo_path/checksums"'
         log "$FUNCNAME" "$pkg_name" "Generated checksums"
 
     else
@@ -2488,8 +2549,9 @@ pkg_checksum() {
 # $@ :
 pkg_checksum_gen() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
-    log "$FUNCNAME" '$repo_dir' "$repo_dir"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
+    log "$FUNCNAME" '$repo_path' "$repo_path"
     # Generate checksums for packages.
     #
     # NOTE: repo_ comes from caller.
@@ -2501,7 +2563,7 @@ pkg_checksum_gen() {
         case ${_res##git+*} in */*[!.])
             set -- "$@" "$_res"
         esac
-    done < "$repo_dir/sources"
+    done < "$repo_path/sources"
 
     printf "\n%s" "$(delegate -- "sh256" "$@")"
 }
@@ -2509,13 +2571,14 @@ pkg_checksum_gen() {
 # $1 pkg_name : package name
 pkg_verify() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local repo_dir="$1"
-    local pkg_name="$2"
+    local repo_path="$1"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
 
     # Verify all package checksums. This is achieved by generating a new set
     # of checksums and then comparing those with the old set.
     #
-    # NOTE: repo_dir comes from caller.
+    # NOTE: repo_path comes from caller.
     log "$FUNCNAME" "$pkg_name" "Verifying sources"
 
     # Generate a new set of checksums to compare against.
@@ -2525,9 +2588,9 @@ pkg_verify() {
     # shellcheck disable=2038,2086
     set -- $hash
 
-    [ -f "$repo_dir/checksums" ] || {
-        : > "$repo_dir/checksums"
-        # printf '%s\n' "$hash" >> "$repo_dir/checksums"
+    [ -f "$repo_path/checksums" ] || {
+        : > "$repo_path/checksums"
+        # printf '%s\n' "$hash" >> "$repo_path/checksums"
     }
 
     # Check that the first column (separated by whitespace) match in both
@@ -2538,11 +2601,11 @@ pkg_verify() {
         log "$FUNCNAME" '$_hash' "${1:-no source}"
         equ "$1-${check:-null}" "$check-$1" ||
         equ "$1-${check:-null}" "$1-SKIP" || {
-            # as "$(stat -c '%U' "$repo_dir/checksums")" /usr/bin/printf '%s\n' "$1" > "$repo_dir/checksums"
+            # as "$(stat -c '%U' "$repo_path/checksums")" /usr/bin/printf '%s\n' "$1" > "$repo_path/checksums"
             [ -n "${KISS_FORCE:+x}" ] || die "$FUNCNAME" "$pkg_name" "Checksum mismatch"
         }
         shift "$(($# != 0))"
-    done < "$repo_dir/checksums"
+    done < "$repo_path/checksums"
 }
 
 # $1 pkg_name : package name
@@ -2550,7 +2613,8 @@ pkg_conflicts() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     # Check to see if a package conflicts with another.
     # pkg_name comes from the caller.
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
 
     log "$FUNCNAME" "$pkg_name" "Checking for package conflicts"
 
@@ -2722,7 +2786,8 @@ file_rwx() {
 
 pkg_install_files() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     shift 1
     # Copy files and create directories (preserving permissions).
     # The 'test $1' will run with '-z' for overwrite and '-e' for verify.
@@ -2818,7 +2883,8 @@ pkg_remove_files() {
 pkg_etc() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local file="$1"
-    local pkg_name="$2"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local hash="$(delegate -- "sh256" "$tar_dir/$pkg_name/$file" "$KISS_ROOT/${file#/}")"
 
     local sum_new=${hash%%"$newline"*}
@@ -2852,7 +2918,8 @@ pkg_etc() {
 
 removable() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     # Check if a package is removable and die if it is not.
     # A package is removable when it has no dependents.
     log "$FUNCNAME" "$pkg_name" "Checking if package removable"
@@ -2860,7 +2927,8 @@ removable() {
     cd "$sys_db"
     set +f
     # ?
-    pkg_name="$1"
+    repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     log "$FUNCNAME" '$pkg_name' "$pkg_name"
 
     ! grep -lFx -- "$pkg_name" */depends ||
@@ -2874,7 +2942,8 @@ removable() {
 # could be subshell function before local version
 pkg_remove() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local repo_target="$sys_db/$pkg_name"
     # Remove a package and all of its files. The '/etc' directory is handled
     # differently and configuration files are *not* overwritten.
@@ -2919,7 +2988,8 @@ pkg_remove() {
 # $3 missing   : missing package(s)
 installable() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
-    local pkg_name="$1"
+    local repo_url="$1"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     local depents="$2"
     local missing="$3"
     # Check if a package is removable and die if it is not.
@@ -3012,7 +3082,7 @@ pkg_install() {
     local repo_url="$1"
     local action="install"
     log "$FUNCNAME" '$repo_url' "$repo_url"
-    log "$FUNCNAME" '$repo_dir' "$repo_dir [global]"
+    log "$FUNCNAME" '$repo_path' "$repo_path [global]"
 
     # Install a built package tarball.
     #
@@ -3051,20 +3121,21 @@ pkg_install() {
 
             [ -f "$repo_url" ] || die "$FUNCNAME" "File '$repo_url' does not exist"
 
-            tar_file="$repo_url"
             pkg_name="${repo_url##*/}"
             pkg_name="${pkg_name%@*}"
+            repo_resolve "$FUNCNAME" "pkg_name" "$pkg_name" "repo_dir" _
+            [ -z "${repo_dir##*"${sys_db}"*}" ] || repo_source="$repo_dir/$pkg_name"
             repo_target="$sys_db/$pkg_name"
+            tar_file="$repo_url"
             ;;
 
         *)
             log "$FUNCNAME" 'non tar $repo_url' "$repo_url"
 
             repo_url=$(standardize $repo_url)
-            pkg_name="${repo_url##*/}"
-            local repo_dir_parent="${repo_url%/*}"
+            repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" "repo_dir" _
+            [ -z "${repo_dir##*"${sys_db}"*}" ] || repo_source="$repo_dir/$pkg_name"
             repo_target="$sys_db/$pkg_name"
-            [ "$sys_db" == "$repo_dir_parent" ] || repo_source="$repo_url"
             tar_file="$(delegate -- "pkg_cache" "$pkg_name")"
             { [ "$?" -eq 0 ] && ok "$tar_file"; } || {  # die "$FUNCNAME" "$pkg_name" "not yet built"
                 { action=c; ! pkg_checksum  "$pkg_name" 2>&1 > /dev/stderr; } ||
@@ -3075,9 +3146,19 @@ pkg_install() {
             ;;
     esac
 
+    [ -n "$repo_source" ] || {
+        repo_source="$(delegate -- "pkg_find" "$pkg_name" "" "-d" "$KISS_PATH")"
+        # IFS=$'\3' read -r repo_source _ _ repo_ver repo_rel \
+        #     < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$pkg_dir/$pkg_name/$db") > /dev/null ||
+        # die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
+        log "$FUNCNAME" '$repo_source' "$repo_source [first encountered]"
+    }
+    [ -d "$repo_source" ] || die  "$FUNCNAME" '$repo_source' "$repo_source [dir does not exist]"
+
     pkg_dirs "$action" "$pkg_name"
 
     log "$FUNCNAME" '$pkg_name' "$pkg_name"
+    log "$FUNCNAME" '$repo_source' "$repo_source"
     log "$FUNCNAME" '$repo_target' "$repo_target"
     log "$FUNCNAME" '$tar_dir/$pkg_name'  "$tar_dir/$pkg_name"
 
@@ -3193,14 +3274,6 @@ pkg_install() {
 
     [ -d "$pkg_dir/$pkg_name/$db/$pkg_name" ] || die "$FUNCNAME" "$pkg_dir/$pkg_name/$db/$pkg_name" "does not exist"
 
-    [ -n "$repo_source" ] || {
-        repo_source="$(delegate -- "pkg_find" "$pkg_name" "" "-d" "$KISS_PATH")"
-        # IFS=$'\3' read -r repo_source _ _ repo_ver repo_rel \
-        #     < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$pkg_dir/$pkg_name/$db") > /dev/null ||
-        # die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-        log "$FUNCNAME" '$repo_source' "$repo_source [first encountered]"
-    }
-    [ -d "$repo_source" ] || die  "$FUNCNAME" '$repo_source' "$repo_source"
     IFS=$' ' read -r repo_ver repo_rel < <(cat "$repo_source/version") > /dev/null ||
     die "$FUNCNAME" 'cat "$repo_source/version"' "failed on $LINENO"
     log "$FUNCNAME" '$repo_ver' "$repo_ver"
@@ -3436,20 +3509,20 @@ pkg_upgrade() {
 
     for pkg_name in "$sys_db/"*; do set -f
         pkg_dirs "$action" "$pkg_name"
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        IFS=$'\3' read -r repo_path ver_pre rel_pre repo_ver repo_rel \
             < <(pkg_version "$FUNCNAME" "${pkg_name##*/}" "" "" "$sys_db") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-        null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
+        null "$repo_path" && die "$FUNCNAME" '$repo_path' "$repo_path"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
-        IFS=$'\3' read -r repo_dir ver_pre rel_pre repo_ver repo_rel \
+        IFS=$'\3' read -r repo_path ver_pre rel_pre repo_ver repo_rel \
             < <(pkg_version "$FUNCNAME" "${pkg_name##*/}") > /dev/null ||
         die "$FUNCNAME" 'pkg_version' "failed on $LINENO"
-        null "$repo_dir" && die "$FUNCNAME" '$repo_dir' "$repo_dir"
+        null "$repo_path" && die "$FUNCNAME" '$repo_path' "$repo_path"
         null "$repo_ver" && die "$FUNCNAME" '$repo_ver' "$repo_ver"
 
         # Detect repository orphans (installed packages with no
         # associated repository).
-        case $repo_dir in *"$REPO_ROOT/installed/"*)
+        case $repo_path in *"$REPO_ROOT/installed/"*)
             _repo_orp="$_repo_orp$newline${pkg_name##*/}"
         esac
 
@@ -3543,7 +3616,7 @@ pkg_help_ext() {
     # Intentional, globbing disabled.
     # shellcheck disable=2046,2030,2031
     set -- $(delegate -- "pkg_find" kiss-\* all -x "$PATH")
-    null "$1" && die "$FUNCNAME" '$repo_dir' "$1"
+    null "$1" && die "$FUNCNAME" '$repo_path' "$1"
 
     local path_list
     # To align descriptions figure out which extension has the longest
@@ -3655,9 +3728,87 @@ generate_share_link() {
     eval "$anchor_root_name=\"$body_root_value\""
 }
 
+repo_resolve() {
+    [ "$#" -ge "3" ] || die "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local scope="$1"
+    debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    [ "$2" == "_" ] || [ "$2" == "" ] || local pkg_name_name="$2"
+    local repo_url="$3"
+    log "$FUNCNAME" '$repo_url' "$repo_url"
+
+    repo_url=$(standardize $repo_url)
+    local pkg_name_value="${repo_url##*/}"
+    log "$FUNCNAME" '$pkg_name_value' "$pkg_name_value"
+    eval "$pkg_name_name=\"$pkg_name_value\""
+    eval echo "$pkg_name_name = \"\$$pkg_name_name\""
+    [ "$scope" != "pkg_find" ] || return 0
+
+    [ "$4" == "_" ] || [ "$4" == "" ] || local repo_dir_name="$4"
+    [ "$5" == "_" ] || [ "$5" == "" ] || local repo_path_name="$5"
+
+    [ -n "${repo_dir_name:+x}" ] || [ -n "${repo_path_name:+x}" ] || return 0
+
+    eval "local repo_dir_value=\"\$$repo_dir_name\""
+    eval "local repo_path_value=\"\$$repo_path_name\""
+
+    { [ -z "${repo_dir_value:+x}" ] &&
+    [ -z "${repo_path_value:+x}" ]; } || {
+        if [ -n "${repo_dir_name:+x}" ]; then
+            if [ -n "${repo_dir_value:+x}" ]; then
+                eval "$repo_dir_name=\"$repo_dir_value\""
+            else
+                # [ -z "${repo_path_value:+x}" ] ||
+                eval "$repo_dir_name=\"${repo_path_value%/*}\""
+            fi
+        fi
+        if [ -n "${repo_path_name:+x}" ]; then
+            if [ -n "${repo_path_value:+x}" ]; then
+                eval "$repo_path_name=\"$repo_path_value\""
+            else
+                # [ -z "${repo_dir_value:+x}" ] ||
+                eval "$repo_path_name=\"$repo_dir_value/$pkg_name_value\""
+            fi
+        fi
+        return 0
+    }
+
+    if [ -z "${repo_url##*"/"*}" ] && [ ! -d "${repo_url}" ]; then
+        { [ -z "${repo_dir_name:+x}" ] && [ -z "${repo_path_name:+x}" ]; } || local repo_dir_value="${repo_url%/*}"
+        [ -z "${repo_path_name:+x}" ] || local repo_path_value="$repo_url"
+    else
+        { [ -z "${repo_dir_name:+x}" ] && [ -z "${repo_path_name:+x}" ]; } || {
+            [ -n "${repo_dir_value:+x}" ] ||
+            [ -z "${REPO_DIR:+x}" ] || {
+                log "$FUNCNAME" '$REPO_DIR' "$REPO_DIR"
+                repo_dir_value="$REPO_DIR"
+            }
+
+            [ -n "${repo_dir_value:+x}" ] ||
+            [ -z "${KISS_PATH##*:*}" ] ||
+            [ ! -d "$KISS_PATH/$pkg_name_value" ] || {
+                log "$FUNCNAME" '$KISS_PATH' "$KISS_PATH"
+                repo_dir_value="$KISS_PATH"
+            }
+            [ -n "${repo_dir_value:+x}" ] || {
+                repo_path_value="$(delegate -- "pkg_find" "$pkg_name_value" "" "-d" "$KISS_PATH")"
+                repo_dir_value="${repo_path_value%/*}"
+            }
+        }
+        [ -z "${repo_path_name:+x}" ] || repo_path_value="$repo_dir_value/$pkg_name_value"
+    fi
+    [ -z "${repo_dir_name:+x}" ] || {
+        log "$FUNCNAME" '$repo_dir_value' "$repo_dir_value"
+        eval "$repo_dir_name=\"$repo_dir_value\""
+    }
+    [ -z "${repo_path_name:+x}" ] || {
+        log "$FUNCNAME" '$repo_path_value' "$repo_path_value"
+        eval "$repo_path_name=\"$repo_path_value\""
+    }
+}
+
 init_dirs() {
     local ppwd="$1"
-
+    shift 1
     {
         : "${KISS_SRC_ROOT:?kiss requires KISS_SRC_ROOT be set (prefer to a normal users share folder)}"
         KISS_SRC_ROOT="$(standardize "$KISS_SRC_ROOT")"
@@ -3675,9 +3826,16 @@ init_dirs() {
         proc_volatile="$KISS_TMPDIR/proc"
         [ -d "$proc_volatile" ] || mkdir -p "$proc_volatile"
 
-        log_dir="$KISS_TMPDIR/logs"
-        [ -d "$log_dir" ] || mkdir -p "$log_dir"
-        touch "$log_dir/build.log"
+        if [ -z "${LOG_DIR:+x}" ]; then
+            log_dir="$KISS_TMPDIR/logs"
+            [ -d "$log_dir" ] || mkdir -p "$log_dir"
+            touch "$log_dir/build.log"
+        else
+            log_dir="$LOG_DIR"
+            set -- $(delegate -- as_dir_owner "$LOG_DIR")
+            [ -d "$LOG_DIR" ] || $@ mkdir -p "$LOG_DIR"
+            $@ touch "$LOG_DIR/build.log"
+        fi
 
         hint "$FUNCNAME" 'New session' "started"
     }
@@ -3709,16 +3867,16 @@ init_dirs() {
     cache_dir=${cache_dir%"${cache_dir##*[!/]}"}/kiss
     [ -d "$cache_dir" ] || mkdir -p "$cache_dir"
 
-    # : "${share_src_root:="$KISS_SRC_ROOT/sources"}"
-    generate_share_link "share_src_root" "src_root" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "sources"
+    # : "${share_src_dir:="$KISS_SRC_ROOT/sources"}"
+    generate_share_link "share_src_dir" "src_dir" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "sources"
 
-    # src_root_user="$(stat -c '%U' "$(readlink -f "${src_root}")")"
+    # src_dir_user="$(stat -c '%U' "$(readlink -f "${src_dir}")")"
 
     # : "${share_proc_root:="$KISS_SRC_ROOT/proc"}"
     generate_share_link "share_proc_root" "proc_root" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "proc"
 
-    # : "${share_archive_root:="$KISS_SRC_ROOT/archive"}"
-    generate_share_link "share_archive_root" "archive_root" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "archive"
+    # : "${share_archive_path:="$KISS_SRC_ROOT/archive"}"
+    generate_share_link "share_archive_path" "archive_path" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "archive"
 
 
     log "$FUNCNAME" '$KISS_SRC_ROOT' "$KISS_SRC_ROOT"
@@ -3734,7 +3892,8 @@ pkg_clear() {
     log "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
 
     local action="$1"
-    local pkg_name="$2"
+    local repo_url="$2"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
 
     [ ! -d "$make_dir/$pkg_name" ] || [ "$make_dir" = "/make" ] || find "$make_dir/$pkg_name" -mindepth 1 -delete
     [ ! -d "$tmp_dir/$pkg_name" ] || [ "$tmp_dir" = "/tmp" ] || as "$kiss_root_user" find "$tmp_dir/$pkg_name" -mindepth 1 -delete
@@ -3749,7 +3908,7 @@ pkg_clear() {
     # tar_file in $bin_dir/$pkg_name mean building succeeded
     # [ ! -d "$bin_dir/$pkg_name" ] || [ "$bin_dir" = "/bin" ] || find "$bin_dir/$pkg_name" -mindepth 1 -delete
 
-    # [ "$src_root/$pkg_name" = "/$pkg_name" ]    || find "$src_root/$pkg_name"  -mindepth 1 -delete
+    # [ "$src_dir/$pkg_name" = "/$pkg_name" ]    || find "$src_dir/$pkg_name"  -mindepth 1 -delete
 
     # [ ! -d "${KISS_TMPDIR}/proc" ] ||
     # for item in $(\ls -x "${KISS_TMPDIR}/proc"); do [ "$item" = "$pkg_name" ] || \rm -rf "${KISS_TMPDIR}/proc/$item"; done
@@ -3780,9 +3939,9 @@ maintain_ownership() {
         < <(am_owner "$root_dir") > /dev/null ||
         die "$FUNCNAME" 'am_owner' "failed on $LINENO"
 
-    log "$FUNCNAME" '$root_dir' "$root_dir"
-    log "$FUNCNAME" '$target_dir' "$target_dir"
-    log "$FUNCNAME" '$root_dir_user' "$root_dir_user"
+    debug "$FUNCNAME" '$root_dir' "$root_dir"
+    debug "$FUNCNAME" '$target_dir' "$target_dir"
+    debug "$FUNCNAME" '$root_dir_user' "$root_dir_user"
 
     if [ -d "$target_dir" ]; then
         IFS=$'\3' read -r target_dir_user target_dir_group \
@@ -3833,7 +3992,8 @@ pkg_dirs() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
 
     local action="$1"
-    local pkg_name="$2"
+    local repo_url="$2"
+    repo_resolve "pkg_name" "$repo_url" _ _
 
     [ -n "${src_user:+x}" ] ||
     IFS=$'\3' read -r  src_user _ \
@@ -3879,8 +4039,8 @@ pkg_dirs() {
             maintain_ownership "$pkg_dir" "$pkg_dir/$pkg_name"
             maintain_ownership "$tar_dir" "$tar_dir/$pkg_name"
             maintain_ownership "$bin_dir" "$bin_dir/$pkg_name"
-            maintain_ownership "$src_root" "$src_root/$pkg_name"
-            maintain_ownership "$archive_root" "$archive_root/$pkg_name"
+            maintain_ownership "$src_dir" "$src_dir/$pkg_name"
+            maintain_ownership "$archive_path" "$archive_path/$pkg_name"
 
             pkg_clear "$action" "$pkg_name"
 
@@ -3910,8 +4070,8 @@ pkg_dirs() {
     log "$FUNCNAME" '$pkg_dir' "$pkg_dir"
     log "$FUNCNAME" '$tar_dir' "$tar_dir"
     log "$FUNCNAME" '$bin_dir' "$bin_dir"
-    log "$FUNCNAME" '$src_root' "$src_root"
-    log "$FUNCNAME" '$archive_root' "$archive_root"
+    log "$FUNCNAME" '$src_dir' "$src_dir"
+    log "$FUNCNAME" '$archive_path' "$archive_path"
 
     # printf "%s" "$proc_root"
 }
@@ -3952,8 +4112,7 @@ subshell_action_all() {
 
     trap_off
     for repo_url in $@; do
-        repo_url=$(standardize $repo_url)
-        local pkg_name="${repo_url##*/}"
+        repo_resolve "pkg_name" "$repo_url" "repo_dir" _
         pkg_name="${pkg_name%@*}"
         log "$FUNCNAME" '$pkg_name' "$pkg_name"
         $(delegate -- as_user "$kiss_root_user") \
@@ -3972,8 +4131,11 @@ subshell_action_all() {
             REPO_MAIN="$REPO_MAIN" \
             KISS_PID="$KISS_PID" \
             _KISS_LVL="$_KISS_LVL" \
-            SRCDIR="$src_root/$pkg_name" \
-            MAKEDIR="$make_dir/$pkg_name" \
+            SRC_DIR="$src_dir" \
+            LOG_DIR="$log_dir" \
+            REPO_DIR="$repo_dir" \
+            MAKE_DIR="$make_dir" \
+            DESTDIR="$pkg_dir/$pkg_name" \
             "$0" "$action" "$pkg_name"
     done
     trap_on "$action" "$@"
@@ -4076,7 +4238,7 @@ args() {
         c|checksum)     for pkg_name do pkg_checksum "$pkg_name"; done ;;
         d|download)     for pkg_name do pkg_download "$pkg_name"; done ;;
         H|help-ext)     pkg_help_ext "$@" ;;
-        i|install)      for pkg_url do pkg_install "$pkg_url"; done ;;
+        i|install)      for repo_url do pkg_install "$repo_url"; done ;;
         l|list)         pkg_list_version "$FUNCNAME" "$@" ;;
         p|pick)         pkg_pick_up "$1" "$2" ;;
         r|remove)       for pkg_name in $redro; do pkg_remove "$pkg_name"; done ;;
