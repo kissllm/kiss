@@ -27,9 +27,9 @@
 
 # Semantics
 # XXX_DIR     : parent address for a package    (like dirname command)
+# XXX_ROOT    : parent/root address for packages
 # XXX_PATH    : full address of a package      (like realpath command)
 # XXX_FOLDER  : parent dir name for a package   (has no path)
-# XXX_ROOT    : root address for packages
 
 # xxx_dir     : parent address for a package (locally / does not export)
 
@@ -306,23 +306,21 @@ out() {
             [ -z "${contents##*"'"*"'"*}" ] || contents="'$contents'"
             result="$result$(printf "%s" "$contents")"
     esac
-    printf "%s" "$result"
+    printf '%s\n' "$result"
 }
 
 log() {
-    local result="$(out "$1" "$2" "$3")"
-    printf '%s\n' "$result" > /dev/stderr
-    printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 >> $log_dir/build.log
+    out "$1" "$2" "$3" > /dev/stderr \
+        | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 | tee -a $log_dir/build.log
 }
 
 war() {
     # log "${1} WARNING" "$2" "$3"
     local c1_origin="$c1"
     c1='\033[1;43m'
-    local result="$(out "WARNING $1" "$2" "$3")"
+    out "WARNING $1" "$2" "$3" > /dev/stderr \
+        | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 | tee -a $log_dir/build.log
     c1=$c1_origin
-    printf '%s\n' "$result" > /dev/stderr
-    printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 >> $log_dir/build.log
 }
 
 hint() {
@@ -330,31 +328,29 @@ hint() {
     c1='\033[1;45m'
     local c2_origin="$c2"
     c2='\033[1;07m'
-    local result="$(out "TURNTO $1" "$2" "$3")"
+    out "TURNTO $1" "$2" "$3" > /dev/stderr \
+        | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 | tee -a $log_dir/build.log
     c2=$c2_origin
     c1=$c1_origin
-    printf '%s\n' "$result" > /dev/stderr
-    printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 >> $log_dir/build.log
 }
 
 die() {
     # log "${1} ERROR" "$2" "$3"
     local c1_origin="$c1"
     c1='\033[1;41m'
-    local result="$(out "ERROR $1" "$2" "$3")"
+    out "ERROR $1" "$2" "$3" > /dev/stderr \
+        | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 | tee -a $log_dir/build.log
     c1=$c1_origin
-    printf '%s\n' "$result" > /dev/stderr
-    printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 >> $log_dir/build.log
     exit 1
 }
 
 # How to debug:
 # export KISS_DEBUG=1
 # env KISS_DEBUG=1 kiss p acl
-# set -exf
+# set -exf /usr/bin/kiss p acl
 # https://bugzilla.redhat.com/show_bug.cgi?id=1596312
-# strace -f -eexecve q acl 1
-# sh -x ldd /bin/sh
+# strace -f -eexecve /usr/bin/kiss p acl 1
+# sh -x /usr/bin/ldd /bin/sh
 debug() {
     # # https://www.shellscript.sh/exitcodes.html
     # # local check_debug=$(set | grep '^KISS_DEBUG=')
@@ -375,9 +371,8 @@ debug() {
 
                 # https://stackoverflow.com/questions/3601515/how-to-check-if-a-variable-is-set-in-bash
 
-                local result="$(out "$1" "$2" "$3")"
-                [ -z "${KISS_DEBUG+x}" ] || printf '%s\n' "$result" > /dev/stderr
-                printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 >> $log_dir/build.log
+    [ -z "${KISS_DEBUG+x}" ] || out "$1" "$2" "$3" > /dev/stderr \
+        | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' 2>&1 | tee -a $log_dir/build.log
 
                 # [ "${KISS_DEBUG+set}" != set ] && printf "%s\n" "$(out "$1" "$2" "$3")" 2>&1 >> $log_dir/build.log
     #     }
@@ -860,7 +855,7 @@ pkg_version() {
     shift 1
     local repo_url="$1"
     local repo_path="$(delegate -- "pkg_find" "$@")"
-    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ "repo_path"
+    repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" _ _
     debug "$FUNCNAME" '$pkg_name' "$pkg_name"
     local list="$2"
     local shell_flag="$3"
@@ -870,11 +865,7 @@ pkg_version() {
     local ver_pre=$repo_ver
     local rel_pre=$repo_rel
 
-    if [ -d "$repo_path" ]; then
-        debug "$FUNCNAME" '$repo_path' "$repo_path"
-    else
-        die "$FUNCNAME" '$repo_path' "No such package ($pkg_name)"
-    fi
+    [ -d "$repo_path" ] || die "$FUNCNAME" '$repo_path' "No such package ($repo_path)"
 
     IFS=$' ' read -r repo_ver repo_rel 2>/dev/null < "$repo_path/version" ||
         die "$FUNCNAME" "$pkg_name" "Failed to read version file ($repo_path/version)"
@@ -2407,6 +2398,7 @@ pkg_build_all() {
 # $1 pkg_name
 pkg_build() {
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
+    local action="build"
     local repo_url="$1"
     repo_resolve "$FUNCNAME" "pkg_name" "$repo_url" "repo_dir" "repo_path"
     # local repo_path="$(delegate -- "pkg_find" "$pkg_name")"
@@ -2445,8 +2437,10 @@ pkg_build() {
 
     [ -z "${USE_GMAKE+x}" ] || {
         log "$FUNCNAME" "GNU make used"
-        [ "$(readlink -f "$bin_dir/$pkg_name/gunzip")" != "/usr/bin/pigz"  ] && as "$src_user" /usr/bin/ln -sf "/usr/bin/pigz"  "$bin_dir/$pkg_name/gunzip"
-        [ "$(readlink -f "$bin_dir/$pkg_name/make")"   != "/usr/bin/gmake" ] && as "$src_user" /usr/bin/ln -sf "/usr/bin/gmake" "$bin_dir/$pkg_name/make"
+        [ "$(readlink -f "$bin_dir/$pkg_name/gunzip")" == "/usr/bin/pigz"  ] ||
+            as "$src_user" /usr/bin/ln -sf "/usr/bin/pigz"  "$bin_dir/$pkg_name/gunzip"
+        [ "$(readlink -f "$bin_dir/$pkg_name/make")"   == "/usr/bin/gmake" ] ||
+            as "$src_user" /usr/bin/ln -sf "/usr/bin/gmake" "$bin_dir/$pkg_name/make"
         export PATH="$bin_dir/$pkg_name:$PATH"
     }
 
@@ -2505,7 +2499,7 @@ pkg_build() {
             # pkg_clean_all
             kill 0
         }
-    } | tee "$log_dir/build.log"
+    } | tee -a "$log_dir/build.log"
 
     # # Delete the log file if the build succeeded to prevent the directory
     # # from filling very quickly with useless logs.
@@ -3731,16 +3725,18 @@ generate_share_link() {
 repo_resolve() {
     [ "$#" -ge "3" ] || die "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     local scope="$1"
+    debug "$FUNCNAME" '$scope' "$scope"
     debug "$FUNCNAME" '$@' "$(esceval "$FUNCNAME" "$@")"
     [ "$2" == "_" ] || [ "$2" == "" ] || local pkg_name_name="$2"
     local repo_url="$3"
-    log "$FUNCNAME" '$repo_url' "$repo_url"
+    debug "$FUNCNAME" '$repo_url' "$repo_url"
 
     repo_url=$(standardize $repo_url)
     local pkg_name_value="${repo_url##*/}"
-    log "$FUNCNAME" '$pkg_name_value' "$pkg_name_value"
+    # log "$FUNCNAME" '$pkg_name_value' "$pkg_name_value"
     eval "$pkg_name_name=\"$pkg_name_value\""
-    eval echo "$pkg_name_name = \"\$$pkg_name_name\""
+    eval debug "$FUNCNAME" "$pkg_name_name" "\"\$$pkg_name_name\""
+
     [ "$scope" != "pkg_find" ] || return 0
 
     [ "$4" == "_" ] || [ "$4" == "" ] || local repo_dir_name="$4"
@@ -3748,31 +3744,12 @@ repo_resolve() {
 
     [ -n "${repo_dir_name:+x}" ] || [ -n "${repo_path_name:+x}" ] || return 0
 
+    [ -z "${repo_dir_name:+x}" ] ||
     eval "local repo_dir_value=\"\$$repo_dir_name\""
+    [ -z "${repo_path_name:+x}" ] ||
     eval "local repo_path_value=\"\$$repo_path_name\""
 
-    { [ -z "${repo_dir_value:+x}" ] &&
-    [ -z "${repo_path_value:+x}" ]; } || {
-        if [ -n "${repo_dir_name:+x}" ]; then
-            if [ -n "${repo_dir_value:+x}" ]; then
-                eval "$repo_dir_name=\"$repo_dir_value\""
-            else
-                # [ -z "${repo_path_value:+x}" ] ||
-                eval "$repo_dir_name=\"${repo_path_value%/*}\""
-            fi
-        fi
-        if [ -n "${repo_path_name:+x}" ]; then
-            if [ -n "${repo_path_value:+x}" ]; then
-                eval "$repo_path_name=\"$repo_path_value\""
-            else
-                # [ -z "${repo_dir_value:+x}" ] ||
-                eval "$repo_path_name=\"$repo_dir_value/$pkg_name_value\""
-            fi
-        fi
-        return 0
-    }
-
-    if [ -z "${repo_url##*"/"*}" ] && [ ! -d "${repo_url}" ]; then
+    if [ -z "${repo_url##*"/"*}" ] && [ -d "${repo_url}" ]; then
         { [ -z "${repo_dir_name:+x}" ] && [ -z "${repo_path_name:+x}" ]; } || local repo_dir_value="${repo_url%/*}"
         [ -z "${repo_path_name:+x}" ] || local repo_path_value="$repo_url"
     else
@@ -3780,21 +3757,21 @@ repo_resolve() {
             [ -n "${repo_dir_value:+x}" ] ||
             [ -z "${REPO_DIR:+x}" ] || {
                 log "$FUNCNAME" '$REPO_DIR' "$REPO_DIR"
-                repo_dir_value="$REPO_DIR"
+                local repo_dir_value="$REPO_DIR"
             }
 
             [ -n "${repo_dir_value:+x}" ] ||
             [ -z "${KISS_PATH##*:*}" ] ||
             [ ! -d "$KISS_PATH/$pkg_name_value" ] || {
                 log "$FUNCNAME" '$KISS_PATH' "$KISS_PATH"
-                repo_dir_value="$KISS_PATH"
+                local repo_dir_value="$KISS_PATH"
             }
             [ -n "${repo_dir_value:+x}" ] || {
                 repo_path_value="$(delegate -- "pkg_find" "$pkg_name_value" "" "-d" "$KISS_PATH")"
-                repo_dir_value="${repo_path_value%/*}"
+                local repo_dir_value="${repo_path_value%/*}"
             }
         }
-        [ -z "${repo_path_name:+x}" ] || repo_path_value="$repo_dir_value/$pkg_name_value"
+        [ -z "${repo_path_name:+x}" ] || local repo_path_value="$repo_dir_value/$pkg_name_value"
     fi
     [ -z "${repo_dir_name:+x}" ] || {
         log "$FUNCNAME" '$repo_dir_value' "$repo_dir_value"
