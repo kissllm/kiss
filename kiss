@@ -1008,13 +1008,16 @@ density_output() {
     local func_name_origin="$func_name"
     length_trim repo_ver "$((2 * TABSTOP))"
     length_trim repo_rel "$TABSTOP"
+    local c1_origin="$c1"
+    local c2_origin="$c2"
     c2="$c1"
-    [ -n "${repo##*$sys_db*}" ] || { route=">O<"; c2='\033[1;07m'; }
-    [ "$repo_source" != "$repo" ] || { route="<x>"; c2='\033[1;45m'; }
+    [ -n "${repo##*$sys_db*}" ] || { route=">O<"; c1='\033[1;45m'; c2='\033[1;07m'; }
+    [ "$repo_source" != "$repo" ] || { route="<x>"; c1='\033[1;45m'; c2='\033[1;07m'; }
     func_name="$(printf "%-${LENGTH_VER}s %-${TABSTOP}d" "$pkg_name" "$index")"
     log "$(printf "%-$((2 * TABSTOP))s %-${MARGIN_ROUTE}s%-${TABSTOP}s" "$repo_ver" "" "$repo_rel")"  \
         "${route:+"${route} "}$repo"
     c2="$c2_origin"
+    c1="$c1_origin"
     func_name="$func_name_origin"
 }
 
@@ -1600,7 +1603,7 @@ download_git() {
     [ -n "${_res_purified##*[@\#]*}" ] || upstream_name="${_res_purified##*[@\#]}"
 
     url="${_res_purified%[\#@]*}"
-    url="${url%.git}.git"
+    # url="${url%.git}.git"
 
     log '$upstream_name' "$upstream_name"
     log '$url' "${url}"
@@ -1745,7 +1748,7 @@ download_git() {
         # $@ git clone --recursive --depth 1 --single-branch --branch $target "${url}" "$_des_dir" 2>/dev/null ||
         # $@ git clone --recursive --filter=tree:0 --branch $target "${url}" "$_des_dir" 2>/dev/null ||
         # $@ git clone --recursive --filter=blob:none --branch $target "${url}" "$_des_dir" 2>/dev/null ||
-        $@ git clone --depth 1 "${url}" "$_des_dir" 2>/dev/null ||
+        $@ git clone --branch $target "${url}" "$_des_dir" 2>/dev/null ||
             die "git clone --recursive --depth 1 --branch $target \"${url}\" \"$_des_dir\"" "failed at $LINENO"
     fi
 }
