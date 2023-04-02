@@ -396,7 +396,7 @@ out() {
 
     # local as_log_dir_user="$(// delegate -- as_user "$log_dir_user")"
 
-    # [ "$log_dir_user" == "$(whoami)" ] || // die '$LOGNAME != $log_dir_user'
+    # [ "$log_dir_user" == "$(whoami)" ] || // die '$(whoami) != $log_dir_user'
     # set --
     # [ "$log_dir_user" == "$(whoami)" ] ||
     # set -- $(// delegate -- as_user "$log_dir_user")
@@ -915,7 +915,8 @@ am_owner() {
     # // log '$group_key' "$group_key"
     # // log '$(/ echo \$$group_key)' "$(/ echo \$$group_key)"
 
-    # equ "$LOGNAME/$user" "$user/$LOGNAME"
+    # loginame="$(whoami)"
+    # equ "$loginame/$user" "$user/$loginame"
 
     printf '%s\3%s\n' "$user" "$group"
 }
@@ -1416,7 +1417,7 @@ pick_up() {
     { // hint 'build_all' "$repo_selected"
         action="build"; ! // build_all "$repo_selected" 2>&1 > /dev/stderr; } || {
         // hint 'pkg_install' "$repo_selected"
-        if ! equ "$LOGNAME" "$kiss_root_user"; then
+        if ! equ "$(whoami)" "$kiss_root_user"; then
             // log '$repo_selected' "$repo_selected"
             // subshell_all "install" "$repo_selected"
         else
@@ -1469,6 +1470,7 @@ pkg_find() {
             _found_path="$(standardize "$_found_path")"
             // debug '$_found_path' "$_found_path"
         }
+        # Expansion will mistake folder name for an implied package name
         set +f
         if null "$list"; then
             // debug '$list' "$list"
@@ -1539,7 +1541,7 @@ list_version() {
 
     # Optional arguments can be passed to check for specific packages. If no
     # arguments are passed, list all.
-    if null "$repo_url"; then 
+    if null "$repo_url"; then
         set +f; set -f -- "$sys_db"/*
     else
         set -- "$pkg_name"
@@ -1851,7 +1853,7 @@ download_url() {
     IFS=$'\3' read -r archive_dir_user _  \
         < <(// am_owner "$archive_path/$pkg_name") > /dev/null ||
         // die 'am_owner' "failed"
-    equ "$LOGNAME" "$archive_dir_user" ||
+    equ "$(whoami)" "$archive_dir_user" ||
     // as_archive_user="$(delegate -- as_user "$archive_dir_user")"
 
     // log '$LOGNAME' "$LOGNAME"
@@ -1869,6 +1871,8 @@ latest_tag() {
     local pkg_name
     IFS=$'\x03' read -r pkg_name _ repo_path < <(// repo_resolve "$repo_url") \
         > /dev/null || // die 'repo_resolve' "failed"
+    // log '$pkg_name' "$pkg_name"
+    // log '$repo_path' "$repo_path"
     shift 1
     local force_fetch
     if [ "$#" -ge "1" ]; then
@@ -1877,6 +1881,8 @@ latest_tag() {
     else
         force_fetch=
     fi
+    local _des_dir
+    local _res_purified
     if [ "$#" -ge "2" ]; then
         local _des_dir="$1"
         local _res_purified="$2"
@@ -1884,7 +1890,7 @@ latest_tag() {
         while read -r src_url dest || ok "${src_url%%\#*}"; do
             ok "${src_url%%\#*}" || continue
 
-            null "${src_url##*"${pkg_name}"*}" || continue
+            null "${src_url##*"${pkg_name%%-*}"*}" || continue
 
             // log '$src_url' "$src_url"
             // log '$dest' "$dest"
@@ -1898,22 +1904,19 @@ latest_tag() {
 
             # '$2' is set when this function is called from 'kiss c' and it is used
             # here to skip calling the Git code.
-            local _res_purified="${_res##"${_res%%+*}+"}"
+            _res_purified="${_res##"${_res%%+*}+"}"
             // log '$_res_purified' "$_res_purified"
             break
         done < "$repo_path/sources"
-
-        [ -n "$_des_dir" ] || local _des_dir="$1"
-        [ -n "$_res_purified" ] || local _res_purified="$2"
     fi
 
-    ok "$_des_dir" || // die '$_des_dir' "can not figure out $_des_dir"
+    ok "$_des_dir" || // die '$_des_dir' "can not figure out \$_des_dir of \"$pkg_name\""
 
     // log '$src_dir' "$src_dir"
     // log '$src_user' "$src_user"
 
     set --
-    equ "$LOGNAME" "$src_user" ||
+    equ "$(whoami)" "$src_user" ||
     set -- "$(// delegate -- as_user "$src_user")"
 
     // log '$_des_dir' "$_des_dir"
@@ -1966,9 +1969,9 @@ latest_tag() {
 
 determine_type() {
     _env
-    local _des_dir="$1"
-    local url="$2"
-    local upstream_name="$3"
+    local upstream_name="$1"
+    local _des_dir="$2"
+    local url="$3"
     shift 3
     local force_fetch
     if [ "$#" -ge "1" ]; then
@@ -1981,7 +1984,7 @@ determine_type() {
     local target=
 
     set --
-    equ "$LOGNAME" "$src_user" ||
+    equ "$(whoami)" "$src_user" ||
         set -- "$(// delegate -- as_user "$src_user")"
 
     [ "$PWD" == "$_des_dir" ] || // cd "$_des_dir"
@@ -1995,7 +1998,7 @@ determine_type() {
     done
     [ -n "$target" ] || {
 
-        [ "$($@ git -C "$_des_dir" rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || {
+        [ "$($@ git -C "$_des_dir" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ] || {
             $@ find "$_des_dir" -mindepth 1 -delete
             $@ git clone --recursive --depth 1 "${url}" "$_des_dir" ||
             $@ git clone --branch $target "${url}" "$_des_dir" 2>/dev/null ||
@@ -2047,7 +2050,7 @@ synchronize() {
     local ver_data
 
     set --
-    equ "$LOGNAME" "$src_user" ||
+    equ "$(whoami)" "$src_user" ||
         set -- "$(// delegate -- as_user "$src_user")"
 
     [ "$PWD" == "$_des_dir" ] || // cd "$_des_dir"
@@ -2090,7 +2093,7 @@ synchronize() {
             // die "git reset --hard origin/$target" "failed"
         } > /dev/stderr
         ver_data="$(printf "%s\n" "$($@ git rev-parse --short 'HEAD@{upstream}' 2>/dev/null)")"
-    
+
     else
         null "$force_fetch" || {
             local targets=$($@ git tag)
@@ -2139,7 +2142,7 @@ download_git() {
     // log '$src_user' "$src_user"
 
     set --
-    equ "$LOGNAME" "$src_user" ||
+    equ "$(whoami)" "$src_user" ||
         set -- "$(// delegate -- as_user "$src_user")"
 
     // log '$_des_dir' "$_des_dir"
@@ -2155,8 +2158,9 @@ download_git() {
     local upstream_name=
     [ -n "${_res_purified##*[@\#]*}" ] || upstream_name="${_res_purified##*[@\#]}"
 
-    url="${_res_purified%[\#@]*}"
-    # url="${url%.git}.git"
+    local url="${_res_purified%[\#@]*}"
+    url="$(standardize "$url")"
+    null "${url##*".git"*}" || url="${url}.git" # url="${url%.git}.git"
 
     // log '$upstream_name' "$upstream_name"
     // log '$url' "${url}"
@@ -4198,7 +4202,7 @@ pkg_update_repo() {
         IFS=$'\3' read -r  pwd_user _  \
             < <(// am_owner "$PWD") > /dev/null ||
             // die 'am_owner' "failed"
-        equ "pwd_user" "$LOGNAME" || {
+        equ "pwd_user" "$(whoami)" || {
             // log 'needs "$user" to update to' "$pwd_user"
             local as_pwd_user="$(// delegate -- as_user "$pwd_user")"
             set -- $as_pwd_user
@@ -4700,7 +4704,7 @@ log_address() {
 
     if [ -n "${LOG_DIR:+x}" ]; then
         LOG_DIR_USER="$(stat -c '%U' "$LOG_DIR")"
-        [ "$LOG_DIR_USER" == "$LOGNAME" ] ||
+        [ "$LOG_DIR_USER" == "$(whoami)" ] ||
         [ "$LOG_DIR" == "$log_dir" ] ||
         flock -x "$KISS_TMPDIR/logs/.lock" -c "$(\cp -f "$LOG_DIR/build.log" "$log_dir/")" &
     else
@@ -5030,7 +5034,7 @@ log_permanent_all() {
     // debug '$log_dir' "$log_dir"
     local cache_dir_user="$(stat -c '%U' "$cache_dir")"
     local as_cache_user="$(// delegate -- as_user "$cache_dir_user")"
-    equ "$cache_dir_user" "$LOGNAME" || {
+    equ "$cache_dir_user" "$(whoami)" || {
         // log '$(whoami)' "$(whoami)"
         // log '$LOGNAME' "$LOGNAME"
         // log '$cache_dir_user' "$cache_dir_user"
@@ -5123,10 +5127,10 @@ subshell_all() {
         // bog "$log_output" '$pkg_name' "$pkg_name"
 
             # HOME="$HOME" \
+            # LOGNAME="$(whoami)" \
             # XDG_CACHE_HOME="$XDG_CACHE_HOME" \
         $(// delegate -- as_user "$kiss_root_user") \
             env \
-            LOGNAME="$(whoami)" \
             RUSTFLAGS="--remap-path-prefix=${PWD=.} ${RUSTFLAGS}" \
             KISS_XHOST_ARCH="$KISS_XHOST_ARCH" \
             KISS_XBUILD_ARCH="$KISS_XHOST_ARCH" \
@@ -5548,7 +5552,7 @@ main() {
 
     trap "exit" INT TERM
 
-    [ "$(whoami)" == "$LOGNAME" ] &&
+    # [ "$(whoami)" == "$LOGNAME" ] &&
     [ "$_KISS_LVL" -ne "1" ] ||
     trap "kill 0" EXIT
     # trap 'for item in $pig_list; do printf "%s %s\n" "In trap \$item" "$item"; kill -0 $item && kill $item; done; kill -0 $KISS_PID && kill $KISS_PID; ' EXIT
