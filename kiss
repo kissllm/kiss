@@ -1483,8 +1483,11 @@ pick_up() {
                 > /dev/null || // die 'pkg_version' "failed"
             [ ! -d "$repo_dir" ] || {
                 repo_dir="$(// delegate -- decode "$repo_dir" "$REPO_MAIN" "REPO_MAIN")"
-                repo_source="$repo_dir/$pkg_name"
-                // log '$repo_source' "$repo_source"
+                repo_source_record="$repo_dir/$pkg_name"
+                [ ! -d "$repo_source_record" ] || {
+                    repo_source="$repo_source_record"
+                    // log '$repo_source' "$repo_source"
+                }
             }
         }
         [ -n "$repo_source" ] ||
@@ -1493,23 +1496,27 @@ pick_up() {
             [ -z "${tail_deep:+x}" ] || {
                 IFS=$' ' read -r _ _ repo_source < <(tail -n "$tail_deep" "$repo_target/keys") \
                     > /dev/null || // die "tail -n $tail_deep \"$repo_target/keys\"" "failed"
-                repo_source="$(// delegate -- decode "$repo_source" "$REPO_MAIN" "REPO_MAIN")"
+                repo_source_record="$(// delegate -- decode "$repo_source" "$REPO_MAIN" "REPO_MAIN")"
+                [ ! -d "$repo_source_record" ] || {
+                    repo_source="$repo_source_record"
+                    // log '$repo_source' "$repo_source"
+                }
             }
-            // log '$repo_source' "$repo_source"
         }
+        [ -z "${repo_list##*"${repo_source}"*}" ] ||
+        repo_list="${repo_list:+"${repo_list} "}$repo_source"
     }
 
     local c2_origin="$c2"
     // debug '$LENGTH_VER' "$LENGTH_VER"
     // debug '$MARGIN_ROUTE' "$MARGIN_ROUTE"
 
+    [ -n "${repo_list:+x}" ] || {
+        // war "$pkg_name" "NONE"
+        return 0
+    }
+
     [ -n "$repo_selected" ] || {
-        [ -n "${repo_list:+x}" ] || {
-            c2="$c1"
-            // log "$pkg_name" "NONE"
-            c2="$c2_origin"
-            return 0
-        }
         local index_valid=0
         local repo_only
         for repo in $repo_list
@@ -1524,7 +1531,14 @@ pick_up() {
             repo_only="$repo"
             : $((index_valid += 1))
         done
+
+        [ -n "$repo_only" ] || {
+            // war "$pkg_name" "NONE"
+            return 0
+        }
+
         [ "$index_valid" -ne "1" ] || repo_selected="$repo_only"
+
     }
 
     ok "$repo_selected" || return 0
