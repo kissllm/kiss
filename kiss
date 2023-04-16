@@ -1,4 +1,4 @@
-#!/bin/sh -eEf
+#!/bin/sh -euEf
 # shellcheck source=/dev/null
 #
 # Simple package manager written in POSIX shell for https://kisslinux.org
@@ -25,6 +25,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# Coding specifications and conventions (recommended by Tuo Jung)
+# Environment variables value convention
+# To simplify the conventions of the system, undefined or "" (empty) means
+# default behavior
+# Since "set -u" is a good habit, "" (empty) should be used for satisficing it
+# "${KISS_STRIP:-""}" will be used where citations are required, which means
+# the default behavior
+# Note the different meanings of the following definitions
+# [ -n "${KISS_STRIP:+x}" ] means no stripping (non-null value)
+# [ -z "${KISS_STRIP:+x}" ] means stripping (non-null value)
+# While
+# [ -n "${KISS_DEBUG:+x}" ] means debugging (non-null value)
+# [ -z "${KISS_DEBUG:+x}" ] means no debugging (non-null value)
+# And readonly makes their values maintaining consistency
+# For history compatibility, we check the value of other customary conventions
+# after this
+
 # Naming convention/semantics
 # XXX_DIR     : parent address for a package    (like dirname command)
 # XXX_ROOT    : parent/root address for packages
@@ -42,8 +59,9 @@
 # shellcheck disable=SC1127,SC2016,SC2015,SC3043,SC2155,SC3001,SC3003,SC3014,SC2287,SC2031
 
 alias /='eval'
+# For functions only
 alias //='lineno="$LINENO"'
-alias __='local mute=1'
+alias !!='local mute=1'
 alias ^^='local mute='
 
 LINES="$(wc -l "$0" | cut -f 1 -d ' ')"
@@ -66,15 +84,29 @@ LINES="$(wc -l "$0" | cut -f 1 -d ' ')"
 # Without this inserted into a function, you will get parent "func_name" for logs and bug reports
 # Otherwise you will get local reports
 # LINENO does nost have luck as FUNCNAME. You need to evaluate it before you want to get the current line number
-alias _=$'{ set -eE; trap \'trace_line "$LINENO"\' ERR; local scope="$func_name" func_name="$FUNCNAME" lineno_scope="$lineno" lineno="$LINENO"; [ "$scope" != "$func_name" ] || // die "$scope" "recursived"; // debug \'$@\' "$(esceval "$@")"; }'
+alias    _=$'{ local scope="$func_name" func_name="$FUNCNAME" lineno_scope="$lineno"; set -eE; trap \'trace_line "$LINENO" "$lineno_scope" "$func_name" "$scope"\' ERR; [ "$scope" != "$func_name" ] || { // bog "$log_output" "$scope" "recursived"; // children_kill "$KISS_PID"; }; [ -z "${KISS_DEBUG+x}" ] || // bog "$log_output" \'$@\' "$(esceval "$@")";}'
 # No detection of recursive calls
-alias __=$'{ set -eE; trap \'trace_line "$LINENO"\' ERR; local scope="$func_name" func_name="$FUNCNAME" lineno_scope="$lineno" lineno="$LINENO"; // debug \'$@\' "$(esceval "$@")"; }'
+alias   __=$'{ local scope="$func_name" func_name="$FUNCNAME" lineno_scope="$lineno"; set -eE; trap \'trace_line "$LINENO" "$lineno_scope" "$func_name" "$scope"\' ERR; [ -z "${KISS_DEBUG+x}" ] || // bog "$log_output" \'$@\' "$(esceval "$@")"; }'
+# No debug
+alias  ___=$'{ local scope="$func_name" func_name="$FUNCNAME" lineno_scope="$lineno"; set -eE; trap \'trace_line "$LINENO" "$lineno_scope" "$func_name" "$scope"\' ERR; }'
 
 # $1 string
 # $2 sub_str
 contains() {
     # Check if a "string list" contains a word.
     case " $1 " in *" $2 "*) return 0; esac; return 1
+}
+
+list_contains() {
+    local list="$1"
+    local element="$2"
+    local result=1
+    for item in $list; do
+        [ "$element" == "$item" ] || continue
+        result=0
+        break
+    done
+    return "$result"
 }
 
 equ() {
@@ -98,27 +130,35 @@ null() {
 # Error trace
 trace_line() {
     local lineno="$1"
+    local lineno_scope="$2"
+    local func_name="$3"
+    local scope="$4"
     # die "$lineno" 'trap'
     set -E
-    [ -z "${scope##*ERROR*}" ] || local func_name="${func_name} ERROR"
+    if [ -z "${func_name:+x}" ]; then
+        func_name="ERR"
+    else
+        [ -z "${func_name##*ERR*}" ] || func_name="${func_name} ERR"
+    fi
     local c1='\033[1;41m'
     local c2='\033[1;32m'
     local c3='\033[m'
-    local result="$(see "$lineno_scope" "$lineno" "trace error" "process halted")"
+    local result="$(see "${lineno_scope:-""}" "$lineno" "trace error" "process halted")"
     printf '%s\n' "$result" > /dev/stderr
     printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
     # bog "$lineno" "$log_output" "trace error" "process halted"
-    # bog "$lineno" "$log_output" "find log at" "$log_output"
+    # bog "$lineno" "$log_output" "$find_tip" "$log_output"
     # read -r _
     // pipe_read_kill "$pid_log" &
     pig_list="${pig_list:+"${pig_list} "}$!"
     // pipe_read_kill "$pid_screen" &
     pig_list="${pig_list:+"${pig_list} "}$!"
-    kill 0
+    kill 0 ||
+    // children_kill "$KISS_PID"
 }
 
 # "set -e" did this
-# trap 'trace_line "$(readlink -f "$0")" "$LINENO"' ERR
+# trap 'trace_line "$LINENO" "" "$(readlink -f "$0")" ""' ERR
 
 # https://stackoverflow.com/questions/70675246/replacing-newlines-with-the-string-n-with-posix-tools
 magic() { { cat -u; printf '\n'; } | awk -v ORS= '{print sep $0; sep="\\n"}'; }
@@ -157,6 +197,10 @@ run() {
     "$@"
 }
 
+dele_gate() {
+    ! equ "$1" "--" || shift 1
+    "$@" | awk 'BEGIN { RS = ""; FS = "\n" } { print $NF }'
+}
 # Some maintainers might print debug information to stdout in a function's definition,
 # but which function has a return value.
 # This delegation makes it sure of only getting the printf content after the last \n,
@@ -165,7 +209,7 @@ run() {
 # local var="$(delegate -- function_name "$@")"
 delegate() {
 
-    // debug '$@' "$(esceval "$@")"
+    # // debug '$@' "$(esceval "$@")"
 
     ! equ "$1" "--" || shift 1
     # https://www.thegeekstuff.com/2010/01/8-powerful-awk-built-in-variables-fs-ofs-rs-ors-nr-nf-filename-fnr/
@@ -269,6 +313,7 @@ see() {
 
     # local key="$1"
     # local contents="$(printf "%b" "$(printf '%s' "$2" | magic)" | tr "\n" " ")"
+    # [ -z "${contents:+x}" ] ||
     # [ -z "${contents##*"'"*"'"*}" ] || contents="'$contents'"
     # # Line number might come from _ or bog itself
     # [ -z "$3" ] || local lineno="$3"
@@ -322,16 +367,18 @@ see() {
     # RESERVED LENGTH   WIDTH_LINES + 1     LENGTH_HEADER
     # real length + 1   WIDTH_LINES + 1     wrapped_key
     # printf spaces     0                   wrapped_key
-
+    : "${scope:=""}"
     local length_scope="$((${#scope} + 1))"
-    [ "$c1" != "$KISS_C1" ] || [ "$length_scope" -le "$WIDTH_SCOPE" ] || scope="${scope:$length_scope - $WIDTH_SCOPE}"
+    # [ "$c1" != "$KISS_C1" ] ||
+    [ "$length_scope" -le "$WIDTH_SCOPE" ] || scope="${scope:$length_scope - $WIDTH_SCOPE}"
     # local length_scope="$((WIDTH_SCOPE > length_scope ? WIDTH_SCOPE : length_scope))"
     length_scope="$((${#scope} + 1))"
     local margin_scope="$((WIDTH_SCOPE - length_scope))"
     [ $margin_scope -ge 0 ] || margin_scope="$(tabstop_remainder $length_scope)"
 
     local length_func_name="$((${#func_name} + 1))"
-    [ "$c1" != "$KISS_C1" ] || [ "$length_func_name" -le "$WIDTH_FUNC_NAME" ] || func_name="${func_name:$length_func_name - $WIDTH_FUNC_NAME}"
+    # [ "$c1" != "$KISS_C1" ] ||
+    [ "$length_func_name" -le "$WIDTH_FUNC_NAME" ] || func_name="${func_name:$length_func_name - $WIDTH_FUNC_NAME}"
     length_func_name="$((${#func_name} + 1))"
     local margin_func_name="$((WIDTH_FUNC_NAME - length_func_name))"
     [ $margin_func_name -ge 0 ] || margin_func_name="$(tabstop_remainder $length_func_name)"
@@ -365,6 +412,7 @@ see() {
     case "$contents" in
         *$newline*|*$cr*)
             # contents="$(printf "%b" "$(printf "%s" "$contents" | magic)" | tr "\n" " ")"
+            [ -z "${contents:+x}" ] ||
             [ -n "${contents##*"\n"*}" ] ||
             # contents="$(printf "%b" "$(printf "%s" "$contents" | magic)" | tr "$cr" "${newline}")"
             contents="$(printf "%b" "$(printf "%s" "$contents")" | tr "$cr" "${newline}")"
@@ -374,6 +422,7 @@ see() {
             local item_previous=
             for item in $contents; do
                 ok "$item" || continue
+                [ -z "${item:+x}" ] ||
                 [ -z "${item##*"'"*"'"*}" ] || item="'$item'"
                 [ "$index" -eq "0" ] || {
                     # length_applied=$length_header
@@ -390,6 +439,7 @@ see() {
             IFS=$IFS_ORIGIN
             ;;
         *)
+            [ -z "${contents:+x}" ] ||
             [ -z "${contents##*"'"*"'"*}" ] || contents="'$contents'"
             result="$result$(printf "%s" "$contents")"
     esac
@@ -405,7 +455,7 @@ see() {
 # S2 key    : variable name
 # $3 value  : contents
 out() {
-    null "$mute" || return 0
+    [ -z "${mute:+x}" ] || return 0
     # For log method 5 and after
     # local log_dir_user="$1"
     local screen_pipe="$1"
@@ -421,12 +471,12 @@ out() {
 
     # For log method 5 and after
 
-    # local as_log_dir_user="$(// delegate -- as_user "$log_dir_user")"
+    # local as_log_dir_user="$(delegate -- as_user "$log_dir_user")"
 
     # [ "$log_dir_user" == "$(whoami)" ] || // die '$(whoami) != $log_dir_user'
     # set --
     # [ "$log_dir_user" == "$(whoami)" ] ||
-    # set -- $(// delegate -- as_user "$log_dir_user")
+    # set -- $(delegate -- as_user "$log_dir_user")
 
     # [ "$(stat -c '%U' "$log_pipe")" == "$log_dir_user" ] || // die '$log_pipe' "wrong user of $log_pipe"
     # ! / '$@ flock -x "$pipe_lock_screen" -c "$(printf "%s\n" "$result" > "$screen_pipe")"' ||
@@ -496,14 +546,14 @@ log() {
     # / 'out "$screen_pipe" "$log_pipe" "$1" "$2" "$3"'
 
     # The way to get line number transfered
-    out "$screen_pipe" "$log_pipe" "$lineno_scope" "$lineno" "$1" "$2"
+    out "$screen_pipe" "$log_pipe" "$lineno_scope" "$lineno" "${1:-""}" "${2:-""}"
 
     # printf '%s\n' "/ $(out "$screen_pipe" "$log_pipe" "$lineno" "$1" "$2")"
     # printf '%s\n' $'out "$screen_pipe" "$log_pipe" "$lineno" "$1" "$2"'
     # out "$screen_pipe" "$log_pipe" "$lineno" "$1" "$2"
 
-    # local as_log_dir_user="$(// delegate -- as_owner "$log_dir")"
-    # set -- $(// delegate -- as_owner "$log_dir")
+    # local as_log_dir_user="$(delegate -- as_owner "$log_dir")"
+    # set -- $(delegate -- as_owner "$log_dir")
     # "$@" flock -x $log_dir/.err -c "$("$@" sed -i $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' "$log_pipe")" &
 
     # https://stackoverflow.com/questions/23665780/flock1-is-failing-to-release-lock
@@ -516,7 +566,8 @@ war() {
     local c1_origin="$c1"
     local c1='\033[1;43m'
     local func_name_origin="$func_name"
-    local func_name="${func_name} WARNING"
+    # local func_name="${func_name} WARNING"
+    local func_name="${func_name} WAR"
 
     # # printf '%s\n' "log \"\$lineno\" \"$2\" \"$3\""
     # out "$screen_pipe" "$log_pipe" "$lineno_scope" "$lineno" "$1" "$2"
@@ -537,13 +588,14 @@ hint() {
     [ "$level" -eq "-1" ] || _
     set -E
     [ -n "${KISS_C1:+x}" ] || // die '$KISS_C1' "$KISS_C1"
-    // log '$cmd_su' "$cmd_su"
+    // debug '$cmd_su' "$cmd_su"
     local c1_origin="$c1"
     local c1='\033[1;45m'
     local c2_origin="$c2"
     local c2='\033[1;07m'
     local func_name_origin="$func_name"
-    local func_name="${func_name} INITIATE"
+    # local func_name="${func_name} INITIATE"
+    local func_name="${func_name} INIT"
 
     # / $'printf \'%s\n\' "local lineno=\"\$LINENO\""';
     # printf '%s\n' "\$lineno = $lineno" > /dev/stderr
@@ -570,20 +622,25 @@ bog() {
     }
     [ -z "$1" ] || local log_output="$1"
     [ -f "$log_output" ] || {
-        local scope="ERROR $scope"
+        if [ -z "${func_name:+x}" ]; then
+            func_name="ERR"
+        else
+            [ -z "${func_name##*ERR*}" ] || func_name="${func_name} ERR"
+        fi
         local c1='\033[1;41m'
         # local c2='\033[1;32m'
         # local c3='\033[m'
         # Line number comes from _
         printf '%s\n' "$(see "$lineno_scope" "$lineno" "$log_output" "$log_output")" > /dev/stderr
-        kill 0
+        kill 0 ||
+        // children_kill "$KISS_PID"
     }
     shift 1
 
     local key="$1"
     local value="$2"
     # Display line number
-    local result="$(see "$lineno_scope" "$lineno" "$key" "$value")"
+    local result="$(see "${lineno_scope:-""}" "$lineno" "$key" "$value")"
     printf '%s\n' "$result" > /dev/stderr
     printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
 }
@@ -593,7 +650,11 @@ bog() {
 die() {
     set -E
     local func_name_origin="$func_name"
-    local func_name="${func_name} ERROR"
+    if [ -z "${func_name:+x}" ]; then
+        func_name="ERR"
+    else
+        [ -z "${func_name##*ERR*}" ] || func_name="${func_name} ERR"
+    fi
     local c1_origin="$c1"
     local c1='\033[1;41m'
     local c2_origin="$c2"
@@ -602,28 +663,31 @@ die() {
 
     local key="$1"
     local value="$2"
-    local result="$(see "$lineno_scope" "$lineno" "$key" "$value")"
+    local result="$(see "${lineno_scope:-""}" "$lineno" "$key" "$value")"
     printf '%s\n' "$result" > /dev/stderr
     printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
-    local result="$(see "$lineno_scope" "$lineno" "find log at" "$log_output")"
+
+    local result="$(see "${lineno_scope:-""}" "$lineno" "$find_tip" "$log_output")"
     printf '%s\n' "$result" > /dev/stderr
     printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
+
+    # // log_permantent_all "$action" $pkg_list
 
     # Won't work as expected
     # printf '%s\n' "bog \"$log_output\" '$1' '$2'"
     # printf '%s\n' $'bog "$log_output" "$key" "$value"'
-    # printf '%s\n' $'bog "$log_output" "find log at" "$log_output"'
+    # printf '%s\n' $'bog "$log_output" "$find_tip" "$log_output"'
 
     # Pause
     # read -r _
     # Without complicated "out/see"
     # printf "%b%-$((${WIDTH_SCOPE} - 1))s%b %b%-$((${WIDTH_FUNC_NAME} - 1))s%b %b%-$((${WIDTH_KEY} - 1))s%b '%s'\n" \
-    #     "$c1" "$scope" "$c3" "$c1" "$func_name" "$c3" "$c2" "find log at" "$c3" "$log_output"
+    #     "$c1" "$scope" "$c3" "$c1" "$func_name" "$c3" "$c2" "$find_tip" "$c3" "$log_output"
 
     # # Through pipes. The pipe_read will shut down the process at the first screen_pipe shown time
     # printf '%s\n' "out \"$screen_pipe\" \"$log_pipe\" \"\$lineno\" '$1' \"$2\""
     # # This following line will never run if the shutting down was triggered by pipe_read
-    # printf '%s\n' "out \"$screen_pipe\" \"$log_pipe\" \"\$lineno\" 'find log at' \"$log_output\""
+    # printf '%s\n' "out \"$screen_pipe\" \"$log_pipe\" \"\$lineno\" '$find_tip' \"$log_output\""
 
     local c2="$c2_origin"
     local c1="$c1_origin"
@@ -633,7 +697,10 @@ die() {
     # Either use pipe_read or this following line to achive stopping the process
     # exit 1  # printf '%s\n' 'exit 1'
     # If use eval inside this function, kill 0 make function does not return, so information will not display
-    kill 0    # printf '%s\n' 'kill 0'
+    # kill 0/$KISS_PID in this way (as root user) will reboot the system if you run kiss in tty
+    # as "root" kill 0    # printf '%s\n' 'kill 0'
+    kill 0 ||
+    // children_kill "$KISS_PID"
 }
 
 # How to debug kiss
@@ -646,8 +713,9 @@ die() {
 # How to use
 # // debug '$key' "$value"
 debug() {
-    local level=-1
-    [ "$level" -eq "-1" ] || _
+    [ -z "${mute:+x}" ] || return 0
+    local level=0
+    [ "$level" -eq "-1" ] || ___
     # # https://www.shellscript.sh/exitcodes.html
     # # local check_debug="$(set | grep '^KISS_DEBUG=')"
     # local check_debug="$(/ echo '$KISS_DEBUG')"
@@ -668,7 +736,8 @@ debug() {
 
     set -E
     local key="$1"
-    local value="$2"
+    # [ -n "${2:+x}" ] || // die '$1-$2' "$1-$2"
+    local value="${2:-""}"
     local result="$(see "$lineno_scope" "$lineno" "$key" "$value")"
     printf '%s\n' "$result" > /dev/stderr
     printf '%s\n' "$result" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
@@ -723,7 +792,7 @@ slot_push() {
 
     # Create a uniquely named temporary file and make a duplicate of
     # the file in '$src_address' if it exists.
-    local stack_top="$(// delegate -- slot_aquire "$pkg_name" "$src_address")"
+    local stack_top="$(delegate -- slot_aquire "$pkg_name" "$src_address")"
     // log '$stack_top' "\"$stack_top\" touched"
 
     [ ! -f "$src_address" ] ||
@@ -774,14 +843,14 @@ mkcd() {
     // log '$PWD' "$PWD"
 }
 
-# decode right to left
+# decode right to left in a pair and left to right in $@ (pairs)
 # $1 src_string : body
 # $2 substitute : output
 # $3 sub_string : input
-# replace "$repo_source" "REPO_MAIN" "$REPO_MAIN" "REPO_ROOT" "$REPO_ROOT"
-#                ^             ^        |             ^        |
-#                |             |________|             |________|
-#                |_________________|______________________|
+# replace "$repo_source" "$REPO_MAIN" "REPO_MAIN" "$REPO_ROOT" "REPO_ROOT"
+#                ^             ^        |             ^           |
+#                |             |________|             |___________|
+#                |_________________|________________________|
 replace() {
     local level=0
     [ "$level" -eq "-1" ] || _
@@ -803,21 +872,23 @@ replace() {
         *-2) break ;;
         *)
             shift 2
+            !!
             // debug '$#' "$#"
             // debug '$sub_string' "$2 [input]"
             // debug '$substitute' "$1 [output]"
+            ^^
     esac done
     // debug '$result_value' "$result_value [output]"
     printf "%s" "$result_value"
 }
 
-# encode right to left
+# encode right to left in a pair and left to right in $@ (pairs)
 # encode "$repo_source" "REPO_MAIN" "$REPO_MAIN" "REPO_ROOT" "$REPO_ROOT"
-#               ^             ^        |             ^        |
-#               |             |________|             |________|
-#               |_________________|______________________|
+#               ^             ^        |             ^           |
+#               |             |________|             |___________|
+#               |_________________|_________________________|
 encode() {
-    local level=0
+    local level=-1
     [ "$level" -eq "-1" ] || _
     // debug '$@' "$(esceval "$@")"
     [ "$#" -ge "3" ] || // die '$#' "$# parameters are not enough"
@@ -826,20 +897,25 @@ encode() {
 
     local key=
     local value=
-    local args=
+    local arguments=
 
     for index in $(seq 1 2 $#); do
         local key="$(/ "printf '%s' \"\${$index}\"")"
         [ -n "$key" ] || key=\"\"
         local value="$(/ "printf '%s' \"\${$((index + 1))}\"")"
         [ -n "$value" ] || value=\"\"
-        args="$args \x03 $key $key $value \\$key \x03"
+        arguments="${arguments:+"${arguments} "}\x03 $key $key $value \\$key \x03"
         # If you have an array, and step in 2 elements at a time
         # set -f -- "$@" "\ " "$key" "$key" "$value" "\\$key" "\ "
     done
-    // debug '$args' "$args"
-    # Don't quote $args in the following line
-    printf "%s" "$(// delegate -- replace "$str" $args)"
+    // debug '$arguments' "$arguments"
+    IFS=$' ' set +f -- $arguments
+    IFS=$' ' set -f -- $arguments
+    set -- "$str" "$@"
+    // debug '$#' "$#"
+    [ "$#" -ge "3" ] || // die '$#' "$# parameters are not enough"
+    # Don't quote $arguments in the following line
+    printf "%s" "$(delegate -- replace "$@")"
 }
 
 # Surround each replacement with substitutions to handled escaped markers.
@@ -850,13 +926,13 @@ encode() {
 # decode "${src_url%"${src_url##*[!/]}"}" \
 #         "\ " "\\PACKAGE" "$pkg_name" "PACKAGE" "PACKAGE" "\ "
 
-# decode right to left
+# decode right to left in a pair and left to right in $@ (pairs)
 # decode "$repo_source" "$REPO_MAIN" "REPO_MAIN" "$REPO_ROOT" "REPO_ROOT"
-#               ^             ^        |             ^        |
-#               |             |________|             |________|
-#               |_________________|______________________|
+#               ^             ^        |             ^           |
+#               |             |________|             |___________|
+#               |_________________|_________________________|
 decode() {
-    local level=0
+    local level=-1
     [ "$level" -eq "-1" ] || _
     // debug '$@' "$(esceval "$@")"
     [ "$#" -ge "3" ] || // die '$#' "$# parameters are not enough"
@@ -865,7 +941,7 @@ decode() {
 
     local value=
     local key=
-    local args=
+    local arguments=
 
     # will be treated as $1+0
     # // debug '$10' "$10"
@@ -879,13 +955,19 @@ decode() {
         local key="$(/ "printf '%s' \"\${$((index + 1))}\"")"
         [ -n "$key" ] || key=\"\"
         // debug '$key' "$key"
-        args="$args \x03 \\$key $value $key $key \x03"
+        arguments="${arguments:+"${arguments} "}\x03 \\$key $value $key $key \x03"
         # If you have an array, and step in 2 elements at a time
         # set -f -- "$@" "\ " "\\$key" "$value" "$key" "$key" "\ "
     done
-    // debug '$args' "$args"
-    # Don't quote $args in the following line
-    printf "%s" "$(// delegate -- replace "$str" $args)"
+    // debug '$arguments' "$arguments"
+    IFS=$' ' set +f -- $arguments
+    IFS=$' ' set -f -- $arguments
+    set -- "$str" "$@"
+    // debug '$#' "$#"
+    [ "$#" -ge "3" ] || // die '$#' "$# parameters are not enough"
+
+    # Don't quote $arguments in the following line
+    printf "%s" "$(delegate -- replace "$@")"
 }
 
 owner() {
@@ -1063,14 +1145,17 @@ run_hook() {
     local command="$1"
     # Run all hooks in KISS_HOOK (a colon separated
     # list of absolute file paths).
-    IFS_ORIGIN=$IFS
-    IFS=:
+    IFS_ORIGIN="$IFS"
+    IFS=$':'
 
-    for hook in ${KISS_HOOK:-}; do case $hook in *?*)
-        "$hook" "$@" || // die "$command" "hook failed: '$hook'"
-    esac done
+    for hook in ${KISS_HOOK:-}; do
+        [ ! -f "$hook" ] ||
+        case $hook in *?*)
+            "$hook" "$@" || // die "$command" "hook failed: '$hook'"
+        esac
+    done
 
-    IFS=$IFS_ORIGIN
+    IFS="$IFS_ORIGIN"
 }
 
 # $1 command
@@ -1145,7 +1230,7 @@ _sh256() {
     # All utilities must match 'sha256sum' output.
     #
     # Example: '<checksum>  <file>'
-    local hash
+    local hash=
 
     # Skip generation if no arguments.
     ! equ "$#" 0 || return 0
@@ -1175,13 +1260,14 @@ _sh256() {
     IFS=$IFS_ORIGIN
 }
 
+# Keys design begin
 # Recover repo from "keys" file
 repo_recover() {
     _
     local repo_url="$1"
     repo_url="$(standardize "$repo_url")"
     local pkg_name="${repo_url##*/}"
-    local tail_deep="$(// delegate -- valid_tail "$repo_url/keys")"
+    local tail_deep="$(delegate -- valid_tail "$repo_url/keys")"
     [ -n "${tail_deep:+x}" ] || // die '$repo_url/keys' "file \"$repo_url/keys\" is invalid"
     local repo_source
     IFS=$' ' read -r _ _ repo_source \
@@ -1195,13 +1281,14 @@ repo_recover() {
     [ -d "$repo_source" ] || // die '$repo_source' "no such package \"$repo_source\""
 
     set --
-    local repo_user="$(// delegate -- owner "$repo_url")"
-    [ "$(whoami)" == "$repo_user" ] || set -- $(// delegate -- as_user "$repo_user")
+    local repo_user="$(delegate -- owner "$repo_url")"
+    [ "$(whoami)" == "$repo_user" ] || set -- $(delegate -- as_user "$repo_user")
     "$@" rsync -aqzL "$repo_source/." --exclude="keys" --exclude="manifest" "$repo_url/"
     "$@" sync
     is_repo "$repo_url" && [ -f "$repo_url/version" ] ||
         // die '$repo_url' "\"$repo_url\" recover failed"
 }
+# Keys design end
 
 # Package version of selected $KISS_PATH
 # $1 pkg_name
@@ -1211,21 +1298,37 @@ repo_recover() {
 pkg_version() {
     _
     local repo_url="$1"
-    local list_type="$2"
-    local target_type="$3"
-    local search_dir="$4"
+    if [ -z "${repo_url:+x}" ]; then
+        // die '$repo_url' "does not exist $repo_url"
+    else
+        [ -n "${repo_url##*"REPO_MAIN"*}" ] || {
+            repo_url="$(delegate -- decode "$repo_url" "$REPO_MAIN" "REPO_MAIN")"
+            [ -n "${repo_url:+x}" ] || // war '$repo_url' "is undefined"
+            [ -d "$repo_url" ] || // war '$repo_url' "'$repo_url' directory does not exist"
+        }
+    fi
+    local list_type="${2:-""}"
+    local target_type="${3:-""}"
+    local search_dir="${4:-""}"
 
     repo_url="$(standardize "$repo_url")"
     local pkg_name="${repo_url##*/}"
+
     is_repo "$repo_url" || {
+        // log '$repo_url' "$repo_url"
+        // log '$pkg_name' "$pkg_name"
+        // log '$search_dir' "$search_dir"
         ok "$search_dir" || search_dir="$KISS_PATH"
-        repo_url="$(// delegate -- pkg_find "$pkg_name" "$list_type" "" "$search_dir")"
+        local repo_uri="$(delegate -- pkg_find "$pkg_name" "$list_type" "$target_type" "$search_dir")"
+
+        [ "$repo_uri" == "$repo_url" ] || {
+            // war '$repo_uri != $repo_url' "\$repo_url == '$repo_url' will be updated to \
+$newline\$repo_uri == '$repo_uri'"
+            repo_url="$repo_uri"
+        }
     }
 
-    // debug '$pkg_name' "$pkg_name"
-    // debug '$repo_url' "$repo_url"
-
-    [ -d "$repo_url" ] || // die '$repo_url' "no such package \"$repo_url\""
+    [ -d "$repo_url" ] || // die '$repo_url' "'$repo_url' no such package"
 
     is_repo "$repo_url" && [ -f "$repo_url/version" ] || {
         [ -f "$repo_url/keys" ] || // die '$repo_url' "is not recoverable [no \"keys\" file]"
@@ -1234,31 +1337,42 @@ pkg_version() {
 
     is_repo "$repo_url" && [ -f "$repo_url/version" ] || // die '$repo_url' "\"$repo_url\" is not valid"
 
-    IFS=$' ' read -r repo_ver repo_rel repo_dir 2>/dev/null < "$repo_url/version" ||
+    IFS=$' ' read -r repo_ver repo_rel repo_dir_encoded 2>/dev/null < "$repo_url/version" ||
         // die "$pkg_name" "failed to read $repo_url/version"
 
-    repo_dir="$(// delegate -- decode "$repo_dir" "$REPO_MAIN" "REPO_MAIN")"
+    local repo_dir_decoded=
 
-    # # local format="$(// delegate -- pkg_format "$repo_url")"
+    [ -n "${repo_dir_encoded:+x}" ] ||
+    ! is_in_main "$repo_url" ||
+    [ -n "${repo_url##*"${sys_db}"*}" ] ||
+        // war '$repo_dir_encoded' "'$repo_dir_encoded' does not exist"
+
+    [ -z "${repo_dir_encoded:+x}" ] || {
+        repo_dir_decoded="$(delegate -- decode "$repo_dir_encoded" "$REPO_MAIN" "REPO_MAIN")"
+        // debug '$repo_dir_decoded' "$repo_dir_decoded"
+        [ -n "${repo_dir_decoded:+x}" ] || // war '$repo_dir_decoded' "is undefined"
+        [ -d "$repo_dir_decoded" ] || // war '$repo_dir_decoded' "'$repo_dir_decoded' directory does not exist"
+    }
+
+    # # local format="$(delegate -- pkg_format "$repo_url")"
 
     # Recursive calling pkg_version itself in latest_tag
+    # [ -z "${repo_url:+x}" ] ||
     # null "${repo_url##*"${sys_db}"*}" ||
     # ! is_in_main "$repo_url" || {
+    #     [ -z "${repo_ver:+x}" ] ||
     #     ok "${repo_ver##*"v"*}" &&
     #     ok "${repo_ver##*"-"*}" &&
     #     # Just enter for history reason. So don't need to consider real git repos
     #     # [ "git" != "$format" ] &&
     #     [ "git" != "$repo_ver" ] || {
     #         is_in_main "$repo_url" || // die 'is_in_main' "did wrong thing"
-    #         IFS=$'\x03' read -r repo_ver repo_rel < <(// delegate -- latest_tag "$repo_url") 2>/dev/null ||
+    #         IFS=$'\x03' read -r repo_ver repo_rel < <(delegate -- latest_tag "$repo_url") 2>/dev/null ||
     #         // die 'latest_tag' "failed"
     #         ok "$repo_ver" && ok "$repo_rel" ||
-    #         IFS=$'\x03' read -r repo_ver repo_rel < <(// delegate -- latest_tag "$repo_url") 2>/dev/null ||
+    #         IFS=$'\x03' read -r repo_ver repo_rel < <(delegate -- latest_tag "$repo_url") 2>/dev/null ||
     #         // die 'latest_tag' "failed"
-    #         local as_version_ower=
-    #         [ "$(whoami)" == "$(stat -c '%U' "$repo_url/version")" ] || as_version_ower="$(// delegate -- as_owner "$repo_url/version")"
-    #         // log '$as_version_ower' "$as_version_ower"
-    #         $as_version_ower sh -c "/usr/bin/printf '%s %s %s\n' \"$repo_ver\" \"$repo_rel\" \"$repo_dir\" > \"$repo_url/version\"" ||
+    #         as_own "$repo_url" sh -c "/usr/bin/printf '%s %s %s\n' \"$repo_ver\" \"$repo_rel\" \"$repo_dir\" > \"$repo_url/version\"" ||
     #         // die 'permission denied' "on writting version to file $repo_url/version"
     #         IFS=$' ' read -r ver rel repo_dir 2>/dev/null < "$repo_url/version" ||
     #         // die "$pkg_name" "failed to read $repo_url/version"
@@ -1267,15 +1381,16 @@ pkg_version() {
     #     }
     # }
 
-    ok "$repo_rel" ||
+    [ -n "${repo_rel:+x}" ] ||
         // die "$pkg_name" "release field not found in version file"
 
     // debug '$repo_ver' "$repo_ver"
     // debug '$repo_rel' "$repo_rel"
-    // debug '$repo_dir' "$repo_dir"
+    // debug '$repo_dir_encoded' "$repo_dir_encoded"
+    // debug '$repo_dir_decoded' "$repo_dir_decoded"
 
     printf 'EOF\x1F%s\x03%s\x03%s\x1FEOF' \
-        "$repo_ver" "$repo_rel" "$repo_dir"
+        "$repo_ver" "$repo_rel" "$repo_dir_decoded"
 
 }
 
@@ -1287,7 +1402,7 @@ version_installed() {
     local pkg_name="${repo_url##*/}"
 
     / "IFS=$'\x03' read -r ver rel repo_dir \
-        <<$(// delegate -- pkg_version "$repo_url" "" "" "$sys_db")" > /dev/null ||
+        <<$(delegate -- pkg_version "$repo_url" "" "" "$sys_db")" > /dev/null ||
         // die 'pkg_version' "failed"
     // log '$ver-$rel' "$ver-$rel"
 }
@@ -1300,20 +1415,20 @@ version_installed() {
 version_split() {
     _
     local repo_url="$1"
-    local list_type="$2"
-    local target_type="$3"
-    local search_dir="$4"
+    local list_type="${2:-""}"
+    local target_type="${3:-""}"
+    local search_dir="${4:-""}"
 
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" || {
         ok "$search_dir" || search_dir="$KISS_PATH"
-        repo_url="$(// delegate -- pkg_find "$pkg_name" "" "" "$search_dir")"
+        repo_url="$(delegate -- pkg_find "$pkg_name" "" "" "$search_dir")"
     }
     // debug '$pkg_name' "$pkg_name"
 
     # https://stackoverflow.com/questions/2488715/idioms-for-returning-multiple-values-in-shell-scripting
     / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-        <<$(// delegate -- pkg_version "$repo_url" "$list_type" "$target_type" "$search_dir")" 2> /dev/null ||
+        <<$(delegate -- pkg_version "$repo_url" "$list_type" "$target_type" "$search_dir")" 2> /dev/null ||
         // die 'pkg_version' "failed"
     ok "$repo_ver" || // die '$repo_ver' "$repo_ver"
     ok "$repo_rel" || // die '$repo_rel' "$repo_rel"
@@ -1343,13 +1458,10 @@ density_output() (
     local repo_ver
     local repo_rel
     local index="$4"
-    __
-    local format="$(// delegate -- pkg_format "$repo_url")"
+    !!
+    local format="$(delegate -- pkg_format "$repo_url")"
     ^^
 
-    # / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-    #     <<$(// delegate -- pkg_version "$repo_url")" > /dev/null ||
-    #     // die 'pkg_version' "failed"
     local index_repo_url=0
     for item in $repo_url; do
         // debug '$item' "$item"
@@ -1357,8 +1469,11 @@ density_output() (
     done
     [ "$index_repo_url" -eq "1" ] || // die '$repo_url' "\"$repo_url\" is an array?"
 
-    IFS=$' ' read -r repo_ver repo_rel repo_dir 2>/dev/null < "$repo_url/version" ||
-        // die "$pkg_name" "failed to read $repo_url/version"
+    # IFS=$' ' read -r repo_ver repo_rel _ 2>/dev/null < "$repo_url/version" ||
+    #     // die "$pkg_name" "failed to read $repo_url/version"
+    / "IFS=$'\x03' read -r repo_ver repo_rel _ \
+        <<$(delegate -- pkg_version "$repo_url")" > /dev/null ||
+        // die 'pkg_version' "failed"
 
     local scope_origin="$scope"
     local func_name_origin="$func_name"
@@ -1368,8 +1483,11 @@ density_output() (
     local c1_origin="$c1"
     local c2_origin="$c2"
     c2="$c1"
+
+    [ -z "${repo_url:+x}" ] ||
     [ -n "${repo_url##*"$sys_db"*}" ] || { route="<x>"; c1='\033[1;45m'; c2='\033[1;07m'; }
     [ "$repo_source" != "$repo_url" ] || { route=">o<"; c1='\033[1;45m'; c2='\033[1;07m'; }
+
     scope="$pkg_name"
     local length_index="$((${#index} + 1))"
     local margin_index="$((TABSTOP - length_index))"
@@ -1388,7 +1506,7 @@ valid_tail() (
     _
     local target_file="$1"
     local tail_deep
-    [ -s "$target_file" ] || // die '$target_file' "keys file \"$target_file\" is empty"
+    [ -s "$target_file" ] || // die '$target_file' "'$target_file' is empty"
     local found=
     tail_deep=1
     local lines="$(wc -l "$target_file" | cut -f 1 -d ' ')"
@@ -1396,7 +1514,7 @@ valid_tail() (
         found="$(tail -n "$tail_deep" "$target_file")"
         : $((tail_deep += 1))
     done
-    [ -n "${found:+X}" ] || // die '$target_file' "keys file \"$target_file\" is invalid"
+    [ -n "${found:+X}" ] || // die '$target_file' "\"$target_file\" is invalid"
     printf '%s' "$tail_deep"
 )
 
@@ -1404,16 +1522,26 @@ is_repo() (
     _
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
-    local result=1
+    local not_repo=1
+
+    // debug '$repo_url' "$repo_url"
+
     case "$repo_url" in
-        *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
+        *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z|*.zip)
+            // debug '$repo_url' "return from tar cases"
             return 0
     esac
 
     [ ! -x "$repo_url/build" ] ||
     [ ! -f "$repo_url/sources" ] ||
-    { [ ! -f "$repo_url/version" ] && [ "git" != "$(// delegate -- pkg_format "$repo_url")" ]; } || return 0
-    return "$result"
+    # Recursively calling teween is_repo and pkg_format
+    # { [ ! -f "$repo_url/version" ] && [ "git" != "$(delegate -- pkg_format "$repo_url")" ]; } || {
+    [ ! -f "$repo_url/version" ] || {
+        // debug '$repo_url' "return from files check"
+        return 0
+    }
+    // debug '$not_repo' "$not_repo"
+    return "$not_repo"
 )
 
 # https://unix.stackexchange.com/questions/598036/how-to-check-if-variable-is-integer-avoid-problem-with-spaces-around-in-posix
@@ -1431,7 +1559,7 @@ is_integer() {
 # $2 index: selected one
 pick_up() {
     _
-    action_of_session="pick"
+    ACTION_OF_SESSION="pick"
     local index=0
 
     local repo_url
@@ -1447,8 +1575,10 @@ pick_up() {
         // log '$pkg_name' "$pkg_name"
         if is_repo "$1"; then
             repo_url="$1"
+            [ -z "${repo_url:+x}" ] ||
             [ -z "${repo_url##*"${sys_db}"*}" ] || repo_source="$repo_url"
             repo_selected="$repo_url"
+            // hint '$repo_selected' "\"$repo_selected\" came from pick_up \$1 == \"$1\" parameter"
             pkg_name="${repo_url##*/}"
             repo_list="$repo_url"
             index_pick_up="$index"
@@ -1462,8 +1592,10 @@ pick_up() {
         is_repo "${PWD}" || // war '$PWD' "does not have repo files"
         if is_repo "${PWD}"; then
             repo_url="${PWD}"
+            [ -z "${repo_url:+x}" ] ||
             [ -z "${repo_url##*"${sys_db}"*}" ] || repo_source="$repo_url"
             repo_selected="$repo_url"
+            // hint '$repo_selected' "\"$repo_selected\" came from pick_up \$PWD == \"$PWD\""
             repo_list="$repo_url"
             index_pick_up="$index"
         else
@@ -1476,35 +1608,38 @@ pick_up() {
 
     local repo_target="$sys_db/$pkg_name"
 
-    [ -n "$repo_source" ] || {
+    [ -n "${repo_source:-""}" ] || {
         [ ! -f "$repo_target/version" ] || {
             / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-            <<$(// delegate -- pkg_version "$repo_url" "" "" "$sys_db")" \
+            <<$(delegate -- pkg_version "$repo_url" "" "" "$sys_db")" \
                 > /dev/null || // die 'pkg_version' "failed"
             [ ! -d "$repo_dir" ] || {
-                repo_dir="$(// delegate -- decode "$repo_dir" "$REPO_MAIN" "REPO_MAIN")"
-                repo_source_record="$repo_dir/$pkg_name"
-                [ ! -d "$repo_source_record" ] || {
-                    repo_source="$repo_source_record"
+                repo_dir="$(delegate -- decode "$repo_dir" "$REPO_MAIN" "REPO_MAIN")"
+                repo_record="$repo_dir/$pkg_name"
+                [ ! -d "$repo_record" ] || {
+                    repo_source="$repo_record"
                     // log '$repo_source' "$repo_source"
                 }
             }
         }
-        [ -n "$repo_source" ] ||
+        # Keys design begin
+        [ -n "${repo_source:-""}" ] ||
         [ ! -f "$repo_target/keys" ] || {
-            local tail_deep="$(// delegate -- valid_tail "$repo_target/keys")"
+            local tail_deep="$(delegate -- valid_tail "$repo_target/keys")"
             [ -z "${tail_deep:+x}" ] || {
-                IFS=$' ' read -r _ _ repo_source < <(tail -n "$tail_deep" "$repo_target/keys") \
+                IFS=$' ' read -r _ _ repo_record < <(tail -n "$tail_deep" "$repo_target/keys") \
                     > /dev/null || // die "tail -n $tail_deep \"$repo_target/keys\"" "failed"
-                repo_source_record="$(// delegate -- decode "$repo_source" "$REPO_MAIN" "REPO_MAIN")"
-                [ ! -d "$repo_source_record" ] || {
-                    repo_source="$repo_source_record"
+                repo_record="$(delegate -- decode "$repo_record" "$REPO_MAIN" "REPO_MAIN")"
+                [ ! -d "$repo_record" ] || {
+                    repo_source="$repo_record"
                     // log '$repo_source' "$repo_source"
                 }
             }
         }
-        [ -z "${repo_list##*"${repo_source}"*}" ] ||
-        repo_list="${repo_list:+"${repo_list} "}$repo_source"
+        # Keys design end
+        ! is_repo "${repo_source:-""}" ||
+        IFS=$'\n' list_contains "$repo_list" "$repo_source" ||
+        repo_list="${repo_list:+"${repo_list}${newline}"}$repo_source"
     }
 
     local c2_origin="$c2"
@@ -1519,25 +1654,35 @@ pick_up() {
     [ -n "$repo_selected" ] || {
         local index_valid=0
         local repo_only
+        local select_from_index=
         for repo in $repo_list
         do
             : $((index += 1))
             [ -d "$repo" ] && [ -f "$repo/version" ] || continue
 
-            // density_output "$pkg_name" "$repo" "$repo_source" "$index"
+            // density_output "$pkg_name" "$repo" "${repo_source:-""}" "$index"
 
-            null "$index_pick_up" || [ "$index" != "$index_pick_up" ] || repo_selected="$repo"
+            null "$index_pick_up" || [ "$index" != "$index_pick_up" ] || {
+                repo_selected="$repo"
+                select_from_index=1
+            }
 
             repo_only="$repo"
             : $((index_valid += 1))
         done
+        [ -z "${repo_selected:+x}" ] ||
+        [ -z "${select_from_index:+x}" ] ||
+        // hint '$repo_selected' "\"$repo_selected\" came from pick_up \$index_pick_up ==  \"$index_pick_up\" parameter"
 
-        [ -n "$repo_only" ] || {
+        [ -n "${repo_only:-""}" ] || {
             // war "$pkg_name" "NONE"
             return 0
         }
 
-        [ "$index_valid" -ne "1" ] || repo_selected="$repo_only"
+        [ "$index_valid" -ne "1" ] || {
+            repo_selected="$repo_only"
+            // hint '$repo_selected' "\"$repo_selected\" came from the only valid element of \"$repo_list\""
+        }
 
     }
 
@@ -1545,10 +1690,10 @@ pick_up() {
 
     [ -n "${kiss_root_user:+x}" ] ||
     IFS=$'\x03' read -r  kiss_root_user _ \
-        < <(// delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
+        < <(delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
     // log "Perfroming selection"
 
-    // density_output "$pkg_name" "$repo_selected" "$repo_source" "$index_pick_up"
+    // density_output "$pkg_name" "$repo_selected" "${repo_source:-""}" "$index_pick_up"
 
     local repo_dir="${repo_selected%/*}"
     local pkg_selected="${repo_selected##*/}"
@@ -1556,7 +1701,7 @@ pick_up() {
     // log '$repo_dir' "$repo_dir"
     // log '$pkg_selected' "$pkg_selected"
 
-    // pkg_dirs "$action_of_session" "$pkg_selected"
+    // pkg_dirs "$ACTION_OF_SESSION" "$pkg_selected"
 
     export REPO_DIR="$repo_dir"
 
@@ -1583,30 +1728,37 @@ pick_up() {
 # $4 $KISS_PATH / $sys_db / $PATH. Don't have pkg_name
 pkg_find() {
     _
-    // debug '$4' "$4"
-    # Figure out which repository a package belongs to by searching for
-    # directories matching the package name in $KISS_PATH/*.
-    set -- "$1" "$2" "$3" "${4:-"$KISS_PATH"}"
-
     local pkg_name="$1"
     pkg_name="${pkg_name##*/}"
-    local list_type="$2"
+    local list_type="${2:-""}"
     ok "$list_type" || pkg_name="$(standardize "$pkg_name")" # pkg_name=${pkg_name%%\*}
     // debug '$pkg_name' "$pkg_name"
-
-    local target_type="$3"
-    local search_dir
-    local real_path="$(realpath "$4" 2>/dev/null)"
-    [ -n "${real_path##*"/"*}" ] || search_dir="$4"
-    [ "pure" == "$list_type" ] || {
+    local target_type=
+    if null "$list_type"; then
+        target_type="${3:-"-d"}"
+    else
+        target_type="${3:-"-x"}"
+    fi
+    local search_dir="${4:-"$KISS_PATH"}"
+    # local real_path="$(realpath "$4" 2>/dev/null)"
+    # [ -n "${real_path##*"/"*}" ] || search_dir="$4"
+    [ "pure" == "$list_type" ] ||
+    # Respect given search_dir
+    # [ -n "${search_dir:+x}" ] && 
+    [ -n "${search_dir##*":"*}" ] || {
+        [ -z "${search_dir##*"${sys_db}"*}" ] ||
         search_dir="${search_dir:+"${search_dir}:"}$sys_db"
         [ -z "${REPO_DIR:+x}" ] || search_dir="${REPO_DIR}:${search_dir}"
     }
+    # Figure out which repository a package belongs to by searching for
+    # directories matching the package name in $KISS_PATH/*.
+    # set -- "$1" "${2:=""}" "$3" "${4:-"$KISS_PATH"}"
+    set -- "$pkg_name" "$list_type" "$target_type" "$search_dir"
     local repo_url=
 
     // debug '$sys_db' "$sys_db"
 
-    IFS_ORIGIN=$LFS
+    IFS_ORIGIN="$IFS"
     IFS=$':'
     # Iterate over KISS_PATH, grabbing all directories which match the query.
     # Intentional.
@@ -1639,9 +1791,9 @@ pkg_find() {
                 repo_url="$repo_dir/$repo_name"
                 repo_url="$(standardize "$repo_url")"
                 // debug '$repo_url' "$repo_url"
-                ! test "${target_type:--x}" "$repo_url" || {
+                contains "$*" "$repo_url" ||
+                ! test "${target_type:--x}" "$repo_url" ||
                     set -f -- "$@" "$repo_url"
-                }
             done
             IFS=$':'
         fi
@@ -1652,26 +1804,28 @@ pkg_find() {
     // debug '$#' "$#"
     // debug '$list_type-$#' "$list_type-$#"
 
+    local repo_result=
     # Figure out which repository a package belongs to by searching for
     # Show all search results if called from 'kiss search', else store the
     # values in variables. If there are 4 arguments, no package has been found.
     case $list_type-$# in
         *-4) ;;
         -*) # null "$list_type"
-            repo_url="$(standardize "$5")"
-            // debug '$repo_url' "$repo_url"
+            repo_result="$(standardize "$5")"
+            // debug '$repo_result' "$repo_result"
             ;;
         *)  # ok "$list_type"
             shift 4;
-            for item in $@; do
-                repo_url="${repo_url:+"${repo_url} "}$item"
+            for item in "$@"; do
+                contains "$repo_result" "$item" ||
+                    repo_result="${repo_result:+"${repo_result} "}$item"
             done
-            // debug '$applications' "$repo_url"
+            // debug '$applications' "$repo_result"
     esac
 
-    // debug '$repo_url' "$repo_url"
+    // debug '$repo_result' "$repo_result"
 
-    printf '%s' "$repo_url"
+    printf '%s' "$repo_result"
 }
 
 list_version() {
@@ -1696,7 +1850,7 @@ list_version() {
     for repo_url do
         // log '$repo_url' "$repo_url"
         / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-            <<$(// delegate -- pkg_version "$repo_url" "" "" "$sys_db")" \
+            <<$(delegate -- pkg_version "$repo_url" "" "" "$sys_db")" \
             > /dev/null || // die 'pkg_version' "failed"
         // log "${repo_url}" "$repo_ver-$repo_rel"
     done
@@ -1704,7 +1858,7 @@ list_version() {
 
 # Should be subshell function
 # How to use:
-# local tar_file="$(// delegate -- pkg_cache "$repo_url")"
+# local tar_file="$(delegate -- pkg_cache "$repo_url")"
 # $1 repo_url : package repo url/uri
 pkg_cache() {
     _
@@ -1715,8 +1869,8 @@ pkg_cache() {
     # Find the tarball of a package using a glob. Use the user's set compression
     # method if found or first match of the below glob.
 
-    / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-        <<$(// delegate -- pkg_version "$repo_url")" > /dev/null || // die 'pkg_version' "failed"
+    / "IFS=$'\x03' read -r repo_ver repo_rel _ \
+        <<$(delegate -- pkg_version "$repo_url")" > /dev/null || // die 'pkg_version' "failed"
 
     // log '$repo_ver' "$repo_ver"
     // log '$repo_rel' "$repo_rel"
@@ -1768,11 +1922,11 @@ source_route() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     local src_url="$2"
     local dest="$3"
-    local action="$4"
-    local _res _target_name _des_dir real_url
+    local action="${4:-""}"
+    local _res= _target_name= _des_dir= real_url=
 
     ok "${2%%\#*}" || {
         printf "%s\x03%s" "" ""
@@ -1780,10 +1934,10 @@ source_route() {
     }
 
     / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-        <<$(// delegate -- pkg_version "$repo_url")" 2> /dev/null || // die 'pkg_version' "failed"
+        <<$(delegate -- pkg_version "$repo_url")" 2> /dev/null || // die 'pkg_version' "failed"
     IFS=$'\x03' read -r _ repo_ver repo_rel \
         repo_major repo_minor repo_patch repo_ident \
-        < <(// delegate -- version_split "$repo_url") > /dev/null || // die 'version_split' "failed"
+        < <(delegate -- version_split "$repo_url") > /dev/null || // die 'version_split' "failed"
     ok "$repo_url" || // die '$repo_url' "$repo_url"
 
     // debug '$repo_major' "$repo_major"
@@ -1795,22 +1949,24 @@ source_route() {
     : "${ARCH:="${KISS_XHOST_ARCH}"}"
     # [ -n "${ARCH:+x}" ] || // die '$ARCH' "${ARCH:+"${ARCH} "}must be defined"
     // log '$ARCH' "$ARCH"
-
-    local real_url="$(delegate -- decode \
-        "${src_url%"${src_url##*[!/]}"}" \
-        "$REPO_MAIN"  "REPO_MAIN" \
-        "$ARCH"       "ARCH"      \
-        "$repo_ver"   "VERSION"   \
-        "$repo_rel"   "RELEASE"   \
-        "$repo_major" "MAJOR"     \
-        "$repo_minor" "MINOR"     \
-        "$repo_patch" "PATCH"     \
-        "$repo_ident" "IDENT"     \
-        "$pkg_name"   "PACKAGE")"
-
+    local real_url="$src_url"
+    case "$src_url" in
+        *"REPO_MAIN"*|*"ARCH"*|*"VERSION"*|*"RELEASE"*|*"MAJOR"*|*"MINOR"*|*"PATCH"*|*"IDENT"*|*"PACKAGE"*)
+            real_url="$(delegate -- decode \
+                    "${src_url%"${src_url##*[!/]}"}" \
+                    "$REPO_MAIN"  "REPO_MAIN" \
+                    "$ARCH"       "ARCH"      \
+                    "$repo_ver"   "VERSION"   \
+                    "$repo_rel"   "RELEASE"   \
+                    "$repo_major" "MAJOR"     \
+                    "$repo_minor" "MINOR"     \
+                    "$repo_patch" "PATCH"     \
+                    "$repo_ident" "IDENT"     \
+                    "$pkg_name"   "PACKAGE")"
+    esac
     // log '$real_url/uri' "$real_url"
 
-    set -- "$pkg_name" "$real_url" "${3%"${3##*[!/]}"}" "$4"
+    set -- "$pkg_name" "$real_url" "${3%"${3##*[!/]}"}" "${4:-""}"
 
     pkg_name="$1"
     src_url="$2"
@@ -1921,14 +2077,14 @@ pkg_download() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
-    local action="$2"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
+    local action="${2:-""}"
 
     // log '$pkg_name' "$pkg_name"
     // log '$action' "$action"
 
     # IFS=$'\x03' read -r repo_url repo_ver repo_rel repo_major repo_minor repo_patch repo_ident \
-    #     < <(// delegate -- version_split "$repo_url") > /dev/null || // die 'version_split' "failed"
+    #     < <(delegate -- version_split "$repo_url") > /dev/null || // die 'version_split' "failed"
 
     # // debug '$repo_url' "$repo_url"
     # // debug '$repo_major' "$repo_major"
@@ -1946,7 +2102,7 @@ pkg_download() {
         // log '$src_url' "$src_url"
         // log '$dest' "$dest"
         IFS=$'\x03' read -r _res _target_name _des_dir real_url \
-            < <(// delegate -- source_route "$repo_url" "$src_url" "$dest" "$action") > /dev/null ||
+            < <(delegate -- source_route "$repo_url" "$src_url" "$dest" "$action") > /dev/null ||
             // die "source_route" "failed"
         // log '$_res' "$_res"
         // log '$_des_dir' "$_des_dir"
@@ -2011,7 +2167,7 @@ download_url() {
     # /usr/bin/kiss: line 1198: -o: not found
     local as_archive_user=
     IFS=$'\x03' read -r archive_dir_user _  \
-        < <(// delegate -- am_owner "$archive_dir/$pkg_name") > /dev/null ||
+        < <(delegate -- am_owner "$archive_dir/$pkg_name") > /dev/null ||
         // die 'am_owner' "failed"
     equ "$(whoami)" "$archive_dir_user" ||
     // as_archive_user="$(delegate -- as_user "$archive_dir_user")"
@@ -2030,7 +2186,7 @@ latest_tag() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     // log '$pkg_name' "$pkg_name"
     // log '$repo_url' "$repo_url"
     shift 1
@@ -2056,7 +2212,7 @@ latest_tag() {
             // log '$dest' "$dest"
 
             IFS=$'\x03' read -r _res _target_name _des_dir real_url \
-                < <(// delegate -- source_route "$repo_url" "$src_url" "$dest" "$action") > /dev/null ||
+                < <(delegate -- source_route "$repo_url" "$src_url" "$dest" "$action") > /dev/null ||
             // die "source_route" "failed"
 
             // log '$_res' "$_res"
@@ -2077,7 +2233,7 @@ latest_tag() {
 
     set --
     equ "$(whoami)" "$src_user" ||
-    set -- $(// delegate -- as_user "$src_user")
+    set -- $(delegate -- as_user "$src_user")
 
     // log '$_des_dir' "$_des_dir"
     # "$src_dir/$pkg_name/${dest:+"$dest/"}."
@@ -2107,20 +2263,24 @@ latest_tag() {
     # target="$("$@" git describe --tags $("$@" git rev-list --tags --max-count=1))"
 
     IFS=$'\x03' read -r upstream_type target \
-        < <(// delegate -- determine_type "$upstream_name" "$_des_dir" "$url" "$force_fetch") \
+        < <(delegate -- determine_type "$upstream_name" "$_des_dir" "$url" "$force_fetch") \
         > /dev/null || // die 'determine_type' "failed"
 
     local rel=1
 
-    local ver="$(// delegate -- synchronize "$upstream_name" "$_des_dir" "$url" "$upstream_type" "$target")"
+    local ver="$(delegate -- synchronize "$upstream_name" "$_des_dir" "$url" "$upstream_type" "$target")"
 
     // log '$ver' "$ver"
 
-    ok "${ver##*"v"*}" || ver="${ver##*"v"}"
-    ok "${ver##*"-"*}" || {
-        ver="${ver%%-*}"
-        rel="${ver##*-}"
-    }
+    case "$ver" in
+        *"v"*) ver="${ver##*"v"}" ;;
+    esac
+    case "$ver" in
+        *"-"*)
+            ver="${ver%%-*}"
+            rel="${ver##*-}"
+    esac
+
     // log '$ver' "$ver"
     // log '$rel' "$rel"
     printf "%s\x03%s" "$ver" "$rel"
@@ -2131,6 +2291,7 @@ determine_type() {
     local upstream_name="$1"
     local _des_dir="$2"
     local url="$3"
+    [ -n "${url:+x}" ] || // die '$url' "\"$url\" is invalid"
     shift 3
     local force_fetch
     if [ "$#" -ge "1" ]; then
@@ -2146,13 +2307,14 @@ determine_type() {
         // log '$url' "$url"
         set --
         equ "$(whoami)" "$src_user" ||
-        set -- $(// delegate -- as_user "$src_user")
+        set -- $(delegate -- as_user "$src_user")
 
         [ "$PWD" == "$_des_dir" ] || // cd "$_des_dir"
 
         [ -z "${USE_TAG:+X}" ] || upstream_type="tag"
         [ -z "${upstream_name:+x}" ] ||
         for item in $("$@" git ls-remote "${url}" --tags origin "refs/tags/*${upstream_name}*" | awk '{print $2}'); do
+            [ -n "${item:+x}" ] || continue
             [ -z "${item##*"${upstream_name}"*}" ] || continue
             target="${item##"refs/tags/"}"
             break
@@ -2181,6 +2343,7 @@ determine_type() {
 
         [ -n "$target" ] ||
         for item in $("$@" git ls-remote "${url}" --heads origin "refs/heads/*" | awk '{print $2}'); do
+            [ -n "${item:+x}" ] || continue
             { [ -n "${upstream_name:+x}" ] && [ -z "${item##*"${upstream_name}"*}" ]; } ||
             [ -z "${item##*"master"*}" ] || [ -z "${item##*"main"*}" ] || [ -z "${item##*"stable"*}" ] ||
             continue
@@ -2215,6 +2378,7 @@ synchronize() {
     local upstream_name="$1"
     local _des_dir="$2"
     local url="$3"
+    [ -n "${url:+x}" ] || // die '$url' "\"$url\" is invalid"
     local upstream_type="$4"
     local target="$5"
     shift 5
@@ -2229,7 +2393,7 @@ synchronize() {
 
     set --
     equ "$(whoami)" "$src_user" ||
-        set -- $(// delegate -- as_user "$src_user")
+        set -- $(delegate -- as_user "$src_user")
 
     [ "$PWD" == "$_des_dir" ] || // cd "$_des_dir"
 
@@ -2284,6 +2448,7 @@ synchronize() {
             // die "git fetch \"${url}\" tag $target --no-tags" "failed"
 
             local target_ref="$("$@" git branch | grep -v remotes | grep \* | awk '{print $2}')"
+            [ -n "${target_ref:+x}" ] || // die '$target_ref' "\"$target_ref\" is invalid"
             [ -z "${target_ref##*"${target}"*}" ] || {
                 [ "$("$@" git branch | grep -v remotes | grep "$target" | awk '{print $1}')" == "$target" ] ||
                 "$@" git checkout tags/"$target" -b "$target" --force ||
@@ -2312,7 +2477,7 @@ download_git() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     // log '$repo_url' "$repo_url"
     shift 1
     local _des_dir="$1"
@@ -2323,7 +2488,7 @@ download_git() {
 
     set --
     equ "$(whoami)" "$src_user" ||
-        set -- $(// delegate -- as_user "$src_user")
+        set -- $(delegate -- as_user "$src_user")
 
     // log '$_des_dir' "$_des_dir"
     # "$src_dir/$pkg_name/${dest:+"$dest/"}."
@@ -2337,6 +2502,7 @@ download_git() {
     [ -n "${_res_purified##*[@\#]*}" ] || upstream_name="${_res_purified##*[@\#]}"
 
     local url="${_res_purified%[\#@]*}"
+    [ -n "${url:+x}" ] || // die '$url' "\"$url\" is invalid"
     url="$(standardize "$url")"
     null "${url##*".git"*}" ||
     ok "${url##*"github"*}" ||
@@ -2348,9 +2514,10 @@ download_git() {
 
     local upstream_type=
     local target=
+    local force_fetch="1"
 
     IFS=$'\x03' read -r upstream_type target \
-        < <(// delegate -- determine_type "$upstream_name" "$_des_dir" "$url" "$force_fetch") \
+        < <(delegate -- determine_type "$upstream_name" "$_des_dir" "$url" "$force_fetch") \
         > /dev/null || // die 'determine_type' "failed"
 
     // log '$target' "$target"
@@ -2371,7 +2538,7 @@ download_git() {
         "$@" git remote add origin "${url}" ||
         // die "git remote set-url origin \"${url}\"" "failed"
 
-        ver="$(// delegate -- synchronize "$upstream_name" "$_des_dir" "$url" "$upstream_type" "$target" "1")"
+        ver="$(delegate -- synchronize "$upstream_name" "$_des_dir" "$url" "$upstream_type" "$target" "1")"
 
         "$@" git rev-parse --short HEAD || // war 'git rev-parse --short HEAD' "failed"
         "$@" git describe --always || // war 'git describe --always' "failed"
@@ -2400,19 +2567,19 @@ download_git() {
     ok "$ver" || // die '$ver' "${ver:+"${ver} "}got wrong value"
     // log '$ver' "$ver"
 
-    ok "${ver##*"v"*}" || ver="${ver##*"v"}"
-    ok "${ver##*"-"*}" || {
-        ver="${ver%%-*}"
-        rel="${ver##*-}"
-    }
+    case "$ver" in
+        *"v"*) ver="${ver##*"v"}" ;;
+    esac
+    case "$ver" in
+        *"-"*)
+            ver="${ver%%-*}"
+            rel="${ver##*-}"
+    esac
 
+    [ -z "${repo_url:+x}" ] ||
     ok "${repo_url##*"${sys_db}"*}" &&
     ! is_in_main "$repo_url" || {
-        local as_version_ower=
-        [ "$(whoami)" == "$(stat -c '%U' "$repo_url/version")" ] ||
-            as_version_ower="$(// delegate -- as_owner "$repo_url/version")"
-        // log '$as_version_ower' "$as_version_ower"
-        $as_version_ower sh -c "/usr/bin/printf '%s %s %s\n' \"$ver\" \"$rel\" \"$repo_dir\" > \"$repo_url/version\"" ||
+        as_own "$repo_url" sh -c "/usr/bin/printf '%s %s %s\n' \"$ver\" \"$rel\" \"$repo_dir\" > \"$repo_url/version\"" ||
         // die 'permission denied' "on writting version to file $repo_url/version"
         IFS=$' ' read -r repo_ver repo_rel repo_dir 2>/dev/null < "$repo_url/version" ||
         // die "$pkg_name" "failed to read $repo_url/version"
@@ -2444,9 +2611,9 @@ extract_tar() {
     # This is a portable shell implementation of GNU tar's
     # '--strip-components 1'. Use of this function denotes a
     # performance penalty.
-    local tarball="$(// delegate -- slot_aquire "$pkg_name" "$_des_dir/tarball")"
+    local tarball="$(delegate -- slot_aquire "$pkg_name" "$_des_dir/tarball")"
     // log '$tarball' "$tarball"
-    local tarball_manifest="$(// delegate -- slot_aquire "$pkg_name" "$_des_dir/tarball-manifest")"
+    local tarball_manifest="$(delegate -- slot_aquire "$pkg_name" "$_des_dir/tarball-manifest")"
     // log '$tarball_manifest' "$tarball_manifest"
 
     // decompress "$_res" > "$tarball" || {
@@ -2573,13 +2740,13 @@ not_empty() {
 }
 
 # $1 repo_url : package repo url/uri
-dump_to_make() {
+local_site() {
     _
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
-
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
+    local repo_dir="${repo_url%/*}"
     # Extract all source archives to the build directory and copy over any
     # local repository files.
     #
@@ -2593,22 +2760,36 @@ dump_to_make() {
 
     while read -r src_url dest || ok "${src_url%%\#*}"; do
         ok "${src_url%%\#*}" || continue
-        IFS=$'\x03' read -r _res _target_name _des_dir _ \
-            < <(// delegate -- source_route "$repo_url" "$src_url" "$dest") > /dev/null ||
+        # Local files relative to $repo_url
+        // log '$src_url' "$src_url"
+        IFS=$'\x03' read -r _res _target_name _des_dir real_url \
+            < <(delegate -- source_route "$repo_url" "$src_url" "$dest") > /dev/null ||
             // die "source_route" "failed"
 
         # Create the source's directories if not null.
         ok "$_res" || continue
+        # Local files relative to $repo_url
+        // log '$real_url' "$real_url"
+        # Local files absolute path
         // log '$_res [extract]' "$_res"
 
+        # Extra preparations for updating
         case $_res in
+            # $_res is a remote git repository link but it was sychronized locally
+            git+*) ;;
+            # $_res is a local archive file
             *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z|*.zip)
                 // extract_tar "$pkg_name" "$_des_dir" "$_res"
                 ;;
+            # Patches/repository files of package manager
             *)
+                // war '$_res' "$_res got updated in extra preparations"
+                # equ "$_target_name" "." ||
+                [ -n "${_res##*"${repo_dir}"*}" ] ||
+                # [ "$_des_dir/$_target_name" == "$_res" ] ||
                 ! rsync -aqzL "$_res" "$_des_dir/" || ! sync ||
-                ! empty "$dest_dir" ||
-                    // die '$dest_dir' "empty directory $dest_dir"
+                ! empty "$_des_dir" ||
+                    // die '$_des_dir' "empty directory $_des_dir"
         esac
 
         # Should be ready
@@ -2617,6 +2798,8 @@ dump_to_make() {
         local dest_dir="$make_dir/$pkg_name${dest:+"/$dest"}"
         dest_dir="$(standardize "$dest_dir")"
         // log '$dest_dir' "$dest_dir"
+
+        # Change to target directory
         // mkcd "$dest_dir"
 
         ! empty "$_des_dir" ||
@@ -2626,6 +2809,7 @@ dump_to_make() {
             // die '$_des_dir/$_target_name' "does not exist file: \"$_des_dir/$_target_name\""
         // log '$_des_dir/$_target_name' "\"$_des_dir/$_target_name\" as the copy source"
 
+        # Do the copy job
         ! rsync -aqzL "$_des_dir/$_target_name" ./ || ! sync ||
         ! empty "$dest_dir" ||
             // die '$dest_dir' "empty directory $dest_dir"
@@ -2648,18 +2832,20 @@ pkg_depends() {
     __
     local deps="$1"
     local makedeps="$2"
-    shift 2
+    local explicit="$3"
+    shift 3
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
-    local policy="$2"
-    local filter="$3"
-    local appended="$4"
-    local dep_stage="$5"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
+    local policy="${2:-""}"
+    local filter="${3:-""}"
+    local appended="${4:-""}"
+    local dep_stage="${5:-""}"
 
     // log '$deps' "$deps"
     // log '$makedeps' "$makedeps"
+    // log '$repo_url' "$repo_url"
     // log '$pkg_name' "$pkg_name"
     // log '$policy' "$policy"
     // log '$filter' "$filter"
@@ -2677,7 +2863,7 @@ pkg_depends() {
         return 0
     }
     # Filter out non-explicit, already installed packages.
-    null "$filter" || ok "$policy" || contains "$explicit" "$pkg_name" ||
+    null "$filter" || ok "$policy" || contains "$explicit" "$repo_url" ||
         [ ! -d "$repo_target" ] || {
             printf 'EOF\x1F%s\x03%s\x1FEOF' "$deps" "$makedeps"
             return 0
@@ -2685,23 +2871,24 @@ pkg_depends() {
     # Detect circular dependencies and bail out.
     # Looks for multiple repeating patterns of (dep dep_parent) (5 is max).
     case " $appended " in
-*" ${appended##* } "*" ${pkg_name} "\
-*" ${appended##* } "*" ${pkg_name} "\
-*" ${appended##* } "*" ${pkg_name} "\
-*" ${appended##* } "*" ${pkg_name} "\
-*" ${appended##* } "*" ${pkg_name} "*)
+*" ${appended##* } "*" ${repo_url} "\
+*" ${appended##* } "*" ${repo_url} "\
+*" ${appended##* } "*" ${repo_url} "\
+*" ${appended##* } "*" ${repo_url} "\
+*" ${appended##* } "*" ${repo_url} "*)
         // die "$pkg_name <> ${4##* }" "circular dependency detected"
     esac
 
     # local repo_url="$repo_target"
     # [ -d "$repo_target" ] ||
-    #     repo_url="$(// delegate -- pkg_find "$pkg_name")"
+    #     repo_url="$(delegate -- pkg_find "$pkg_name")"
 
     # [ -d "$repo_target" ] || // die "$pkg_name" 'is not yet installed'
 
     // log '$repo_url' "$repo_url"
     // log '$KISS_ROOT' "$KISS_ROOT"
-    // log '$4' "$4"
+    // log '$policy' "$policy"
+    // log '$filter' "$filter"
     // log '$appended' "$appended"
 
     make_depends() {
@@ -2733,23 +2920,23 @@ pkg_depends() {
         // log '$dep_type' "$dep_type"
 
         null "${dep##*/*}" ||
-        contains "$appended" "$pkg_name" || {
+        contains "$appended" "$repo_url" || {
             null "${dep##\#*}" || [ -n "${KISS_ROOT:+x}" ] ||
-                # echo "test: $(pkg_depends "$deps" "$makedeps" "$dep" "" "$filter" "$appended $pkg_name" "$dep_type")"
-                / "IFS=$'\x03' read -r deps makedeps <<$(// delegate -- pkg_depends \
-                        "$deps" "$makedeps" "$dep" "" "$filter" "$appended $pkg_name" "$dep_type")"
+                # echo "test: $(pkg_depends "$deps" "$makedeps" "$dep" "" "$filter" "${appended:+"${appended} "}$repo_url" "$dep_type")"
+                / "IFS=$'\x03' read -r deps makedeps <<$(delegate -- pkg_depends \
+                        "$deps" "$makedeps" "$explicit" "$dep" "" "$filter" "${appended:+"${appended} "}$repo_url" "$dep_type")"
             [ -z "${KISS_ROOT:+x}" ] || ok "$dep_type" ||
-                / "IFS=$'\x03' read -r deps makedeps <<$(// delegate -- pkg_depends \
-                        "$deps" "$makedeps" "$dep" "" "$filter" "$appended $pkg_name" "$dep_type")"
+                / "IFS=$'\x03' read -r deps makedeps <<$(delegate -- pkg_depends \
+                        "$deps" "$makedeps" "$explicit" "$dep" "" "$filter" "${appended:+"${appended} "}$repo_url" "$dep_type")"
             # Host dependencies
             [ -z "${KISS_ROOT:+x}" ] || null "$dep_type" ||
-                makedeps="$(// delegate -- make_depends "$makedeps" "$dep")"
+                makedeps="$(delegate -- make_depends "$makedeps" "$dep")"
         }
     done < "$repo_url/depends" || :
 
     # Add parent to dependencies list.
-    // equ "$policy" expl && { ! equ "$dep_stage" make || ok "$(// delegate -- pkg_cache "$repo_url")"; } ||
-        deps="${deps:+"${deps} "}$pkg_name"
+    // equ "$policy" expl && { ! equ "$dep_stage" make || ok "$(delegate -- pkg_cache "$repo_url")"; } ||
+        deps="${deps:+"${deps} "}$repo_url"
 
     for item in $deps; do
         // log '$deps' "$item"
@@ -2764,8 +2951,7 @@ pkg_order() {
     _
     # Order a list of packages based on dependence and take into account
     # pre-built tarballs if this is to be called from 'kiss i'.
-    local order redro deps
-    local makedeps_raw
+    local order= redro=
     for repo_url do
         case $repo_url in
             /*@*.tar.*|*/*)
@@ -2776,8 +2962,8 @@ pkg_order() {
                 # // die 'Not a package' "$repo_url" ;;
             *)
                 # // pkg_depends "deps" "makedeps" "$repo_url" raw
-                / "IFS=$'\x03' read -r "deps" "makedeps" <<$(// delegate -- pkg_depends \
-                        "$deps" "$makedeps" "$repo_url" "raw")"
+                / "IFS=$'\x03' read -r "deps" "makedeps" <<$(delegate -- pkg_depends \
+                        "$deps" "$makedeps" "$explicit" "$repo_url" "raw")"
                 for item in $makedeps; do
                     [ -d "$sys_db/$item" ] || (arg p "$item")
                 done
@@ -2794,10 +2980,12 @@ pkg_order() {
     // log '$*' "$*"
     # Filter the list, only keeping explicit packages. The purpose of these
     # two loops is to order the argument list based on dependence.
-    for repo_url in $deps; do case " $* " in *" $repo_url "*|*" ${repo_url##"$ppwd/"} "*)
-        order="${order:+"${order} "}$repo_url"
-        redro="$repo_url${redro:+" ${redro}"}"
-    esac done
+    for repo_url in $deps; do
+        case " $* " in *" ${repo_url##*/} "*|*" ${repo_url##"$ppwd/"} "*)
+            order="${order:+"${order} "}$repo_url"
+            redro="$repo_url${redro:+" ${redro}"}"
+        esac
+    done
 
     // log '$order' "'$order'"
     // log '$redro' "'$redro'"
@@ -2814,7 +3002,8 @@ pkg_strip() {
 
     # Strip package binaries and libraries. This saves space on the system as
     # well as on the tarballs we ship for installation.
-    [ -f "$make_dir/$pkg_name/nostrip" ] || equ "$KISS_STRIP" 0 && return
+    [ ! -f "$make_dir/$pkg_name/nostrip" ] || [ -z "${KISS_STRIP:+x}" ] ||
+    ! equ "${KISS_STRIP}" "0" || return
 
     // log "$1" "Stripping binaries and libraries"
 
@@ -2876,16 +3065,16 @@ pkg_fix_deps() {
     // log '$sys_db' "$sys_db"
     // log '$pkg_name' "$pkg_name"
 
-    local depends_clone="$(// delegate -- slot_push "$pkg_name" "depends")"
-    // log '$depends pushed' "$depends"
+    local depends_clone="$(delegate -- slot_push "$pkg_name" "depends")"
+    // log 'depends' "was pushed to \$depends_clone == \"$depends_clone\""
 
-    local depends_fixed="$(// delegate -- slot_aquire "$pkg_name" "depends-fixed")"
-    // log '$depends_fixed' "$depends_fixed [pushed]"
+    local depends_fixed="$(delegate -- slot_aquire "$pkg_name" "depends-fixed")"
+    // log 'depends_fixed' "was aquired \$depends_fixed == \"$depends_fixed\""
 
     set +f
     set -f -- "$sys_db/"*/manifest
 
-    unset _fdep_seen
+    local _fdep_seen=
 
     # False positive (not a write).
     # shellcheck disable=2094
@@ -3010,7 +3199,7 @@ pkg_manifest() {
     // log '$dir_operating' "$dir_operating"
     // log '$db' "$db"
 
-    local manifest="$(// delegate -- slot_aquire "$pkg_name" "manifest")"
+    local manifest="$(delegate -- slot_aquire "$pkg_name" "manifest")"
 
     # Create a list of all files and directories. Append '/' to the end of
     # directories so they can be easily filtered out later. Also filter out
@@ -3068,7 +3257,7 @@ manifest_replace() {
     # This used to be a 'sed' call which turned out to be a little
     # error-prone in some cases. This new method is a tad slower but ensures
     # we never wipe the file due to a command error.
-    local manifest_replace_buffer="$(// delegate -- slot_aquire "$pkg_name" "manifest-replace-${2##*/}")"
+    local manifest_replace_buffer="$(delegate -- slot_aquire "$pkg_name" "manifest-replace-${2##*/}")"
 
     while read -r line; do
         ! equ "$line" "$2" || line=$3
@@ -3098,8 +3287,8 @@ pkg_etcsums() {
         set -- "$pkg_dir/$pkg_name/$etc" "$@"
     esac done < "$pkg_dir/$pkg_name/$db/$pkg_name/manifest"
 
-    local hash="$(// delegate -- "sh256" "$@")"
-    // / as "$src_user" sh -c 'printf "%s\n" "$hash" > "$pkg_dir/$pkg_name/$db/$pkg_name/etcsums"'
+    local hash="$(delegate -- "sh256" "$@")"
+    $(delegate -- as_user "$src_user") sh -c "printf '%s\\n' \"$hash\" > \"$pkg_dir/$pkg_name/$db/$pkg_name/etcsums\""
 }
 
 # $1 repo_url : package repo url/uri
@@ -3109,7 +3298,7 @@ pkg_tar() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     // log '$pkg_name' "$pkg_name [local]"
 
     # Create a tarball from the built package's files. This tarball also
@@ -3120,7 +3309,7 @@ pkg_tar() {
     # tree "$pkg_dir"
 
     / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-        <<$(// delegate -- pkg_version "$repo_url")" > /dev/null || // die 'pkg_version' "failed"
+        <<$(delegate -- pkg_version "$repo_url")" > /dev/null || // die 'pkg_version' "failed"
     ok "$repo_ver" || // die '$repo_ver' "$repo_ver"
     local file_name="$pkg_name@$repo_ver-$repo_rel.tar.$KISS_COMPRESS"
     local tar_file="$tar_dir/$pkg_name/$file_name"
@@ -3146,7 +3335,7 @@ pkg_tar() {
     sed -i "/$pkg_name@/d" "$tar_dir/$pkg_name/$repofile"
 
     # Write the checksum to the repo file
-    local cs="$(// delegate -- "_sh256" "$tar_file")"
+    local cs="$(delegate -- "_sh256" "$tar_file")"
     echo "$cs  $file_name" >> "$tar_dir/$pkg_name/$repofile"
     // log "$pkg_name" "repo index updated"
 
@@ -3166,8 +3355,9 @@ build_all() {
     _
 
     local action="build"
-    local deps
-    local makedeps
+    local deps=
+    local makedeps=
+    local explicit_build=
 
     # Build packages and turn them into packaged tarballs.
     # Order the argument list and filter out duplicates.
@@ -3177,14 +3367,14 @@ build_all() {
     for repo_url do
         local pkg_name="${repo_url##*/}"
         // pkg_dirs "$action" "$pkg_name"
-        / "IFS=$'\x03' read -r deps makedeps <<$(// delegate -- pkg_depends \
-                "$deps" "$makedeps" "$repo_url" "expl" "filter")"
+        / "IFS=$'\x03' read -r deps makedeps <<$(delegate -- pkg_depends \
+                "$deps" "$makedeps" "$explicit" "$repo_url" "expl" "filter")"
         explicit="${explicit:+"${explicit} "}$repo_url"
     done
 
     # If this is an update, don't always build explicitly passsed packages
     # and instead install pre-built binaries if they exist.
-    ok "$prefer_cache" || explicit_build=$explicit
+    ok "${prefer_cache:=0}" || explicit_build=$explicit
 
     # Host dependencies
     # If cross building, make sure the build machine has the correct deps
@@ -3211,7 +3401,7 @@ build_all() {
     set -- $deps "$@"
     // log '$@' "$(esceval "$@")"
     # Ask for confirmation if extra packages need to be built.
-    equ "$#" "$explicit_cnt" || // prompt
+    equ "$#" "$explicit_cnt" || // prompt "'$explicit_build' need(s) to be performed"
 
     // log "checking for pre-built dependencies"
 
@@ -3219,14 +3409,15 @@ build_all() {
     # directory and are up to date.
     for repo_url in $@; do
         local pkg_name="${repo_url##*/}"
-        local tar_file="$(// delegate -- pkg_cache "$repo_url")"
+        local tar_file="$(delegate -- pkg_cache "$repo_url")"
         # // war  '$explicit_build' "$explicit_build"
         # doas \ls -al  "$pkg_dir/$pkg_name/$db/$pkg_name"
         # doas \ls -al  "$extract_dir/$pkg_name/$db/$pkg_name"
         if ! contains "$explicit_build" "$repo_url" &&
             ok "$tar_file" &&
             [ -z "${KISS_FORCE:+x}" ] &&
-            [ -d "$pkg_dir/$pkg_name/$db/$pkg_name" ]; then
+            [ -d "$pkg_dir/$pkg_name/$db/$pkg_name" ] &&
+            // identical "$pkg_dir/$pkg_name/$db/$pkg_name" "$repo_url"; then
             // log "$pkg_name" "found pre-built binary"
 
             # Intended behavior.
@@ -3245,8 +3436,8 @@ build_all() {
         // pkg_download "$repo_url"
         local pkg_name="${repo_url##*/}"
         is_repo "$repo_url" ||
-            repo_url="$(// delegate -- pkg_find "$pkg_name")"
-        local format="$(// delegate -- pkg_format "$repo_url")"
+            repo_url="$(delegate -- pkg_find "$pkg_name")"
+        local format="$(delegate -- pkg_format "$repo_url")"
         [ ! -f "$repo_url/sources" ] ||
         [ "$format" == "git" ] ||
         // checksums_verify "$repo_url"
@@ -3273,7 +3464,7 @@ build_all() {
 
         local pkg_name="${repo_url##*/}"
         is_repo "$repo_url" ||
-            repo_url="$(// delegate -- pkg_find "$pkg_name")"
+            repo_url="$(delegate -- pkg_find "$pkg_name")"
         ok "$repo_url" || // die '$repo_url' "$repo_url"
 
         # arg1: queue-status
@@ -3284,7 +3475,7 @@ build_all() {
 
         // log '$repo_url' "$repo_url [local]"
         [ -d "$repo_url" ] || // die '$repo_url' "not found ${repo_url:+"${repo_url} "}[local]"
-        [ ! -f "$repo_url/sources" ] || // dump_to_make "$repo_url"
+        [ ! -f "$repo_url/sources" ] || // local_site "$repo_url"
 
         // log '$db' "$db"
         // log '$PWD' "$PWD"
@@ -3320,10 +3511,14 @@ pkg_build() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     ok "$repo_url" || // die '$repo_url' "$repo_url"
     # Install built packages to a directory under the package name to
     # avoid collisions with other packages.
+
+    / "IFS=$'\x03' read -r repo_ver _ _ \
+            <<$(delegate -- pkg_version "$repo_url")" > /dev/null ||
+    // die 'pkg_version' "failed"
 
     // log '$pkg_dir' "$pkg_dir"
     // log '$tar_dir' "$tar_dir"
@@ -3331,9 +3526,9 @@ pkg_build() {
     // log '$log_dir' "$log_dir"
     // log '$proc_root/$pkg_name' "$proc_root/$pkg_name"
     // log '$make_dir/$pkg_name' "$make_dir/$pkg_name"
-    // log '$repo_ver' "$repo_ver"
     // log '$repo_url' "$repo_url [local]"
     // log '$pkg_name' "$pkg_name"
+    // log '$repo_ver' "$repo_ver"
     // log '$db' "$db"
     // log '$LOGNAME' "$LOGNAME"
     // log '$pkg_dir/$pkg_name/$db/$pkg_name' "$pkg_dir/$pkg_name/$db/$pkg_name"
@@ -3341,6 +3536,12 @@ pkg_build() {
     // mkcd "$make_dir/$pkg_name" "$pkg_dir/$pkg_name/$db/$pkg_name"
 
     // hint "$pkg_name" "starting build"
+    [ -n "${REPO_DIR:+x}" ] ||
+    if is_repo "$repo_url"; then
+        REPO_DIR="${repo_url%/*}"
+    else
+        REPO_DIR=""
+    fi
     // log '$REPO_DIR' "$REPO_DIR"
 
     # arg1: pre-build
@@ -3381,6 +3582,7 @@ pkg_build() {
         # cmd_elf="$cmd_elf" \
         # cmd_sha="$cmd_sha" \
         # cmd_get="$cmd_get" \
+        # KISS_TMPDIR="$KISS_TMPDIR" \
 
         # Define DESTDIR and GOPATH to sane defaults as their use is mandatory
         # in anything using autotools, meson, cmake, etc. Define KISS_ROOT as
@@ -3396,10 +3598,9 @@ pkg_build() {
             RANLIB="${RANLIB:-ranlib}" \
             KISS_SRC_ROOT="$KISS_SRC_ROOT" \
             RUSTFLAGS="--remap-path-prefix=$PWD=. $RUSTFLAGS" \
-            GOFLAGS="-trimpath -modcacherw $GOFLAGS" \
-            GOPATH="$PWD/go" \
-            PATH="$GOPATH/bin:$PATH" \
-            KISS_TMPDIR="$KISS_TMPDIR" \
+            GOFLAGS="-trimpath -modcacherw ${GOFLAGS:-""}" \
+            GOPATH="${GOPATH:-"$PWD/go"}" \
+            PATH="${GOPATH:-"$PWD/go"}/bin:$PATH" \
             REPO_MAIN="$REPO_MAIN" \
             KISS_ROOT="$KISS_ROOT" \
             KISS_XHOST_ARCH="$KISS_XHOST_ARCH" \
@@ -3412,6 +3613,8 @@ pkg_build() {
             KISS_XBUILD_TRIPLE="$KISS_XBUILD_ARCH-linux-$KISS_XBUILD_ABI" \
             KISS_PID="$KISS_PID" \
             _KISS_LVL="$_KISS_LVL" \
+            ACTION_OF_SESSION="${ACTION_OF_SESSION:-"$action"}" \
+            SHELL_OPTIONS="e$(printf '%s' "$-")" \
             REPO_DIR="$REPO_DIR" \
             SRC_DIR="$src_dir" \
             LOG_DIR="$log_dir" \
@@ -3422,14 +3625,15 @@ pkg_build() {
             // log "$pkg_name" "build failed"
             // log "$pkg_name" "if hardcoded doas/sudo/su/ssu, it is not recommended)"
             # // log "$pkg_name" "Log stored to \"$log_output\""
-            // log_permanent_all "$action" "$pkg_name"
+            // log_permanent_all "$log_output" "$action" "$pkg_name"
             # arg1: build-fail
             # arg2: package name
             # arg3: path to build directory
             (// run_hook build-fail "$pkg_name" "$make_dir/$pkg_name") || :
 
             # clean_all
-            kill 0
+            kill 0 ||
+            // children_kill "$KISS_PID"
         }
     } | tee -a "$log_output"
 
@@ -3455,21 +3659,21 @@ checksum() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
 
     // pkg_download "$repo_url" c
 
     // log '$repo_url' "$repo_url"
     [ -f "$repo_url/sources" ] || return 0
 
-    local hash="$(// delegate -- "checksum_gen" "$repo_url")"
+    local hash="$(delegate -- "checksum_gen" "$repo_url")"
 
     if ok "$hash"; then
         local as_kiss_root_usr=
         [ "$(whoami)" == "$kiss_root_user" ] ||
-        local as_kiss_root_usr="$(// delegate -- as_user "$kiss_root_user")"
+        local as_kiss_root_usr="$(delegate -- as_user "$kiss_root_user")"
         // log '$as_kiss_root_usr' "$as_kiss_root_usr"
-        $as_kiss_root_usr sh -c '/usr/bin/printf "%s\n" "$hash" > "$repo_url/checksums"'
+        $as_kiss_root_usr sh -c "/usr/bin/printf '%s\n' \"$hash\" > \"$repo_url/checksums\""
         // log "$pkg_name" "checksums generated"
 
     else
@@ -3483,14 +3687,14 @@ checksum_gen() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     // log '$repo_url' "$repo_url"
     # Generate checksums for packages.
     #
     # NOTE: repo_ comes from caller.
     while read -r src_url dest || ok "${src_url%%\#*}"; do
         IFS=$'\x03' read -r _res _ _ _ \
-            < <(// delegate -- source_route "$repo_url" "$src_url" "$dest") > /dev/null ||
+            < <(delegate -- source_route "$repo_url" "$src_url" "$dest") > /dev/null ||
             // die "source_route" "failed"
 
         case ${_res##git+*} in */*[!.])
@@ -3499,7 +3703,7 @@ checksum_gen() {
     done < "$repo_url/sources"
 
     # sh256 "$hash_name" "$@"
-    local hash="$(// delegate -- sh256 "$@")"
+    local hash="$(delegate -- sh256 "$@")"
     printf "%s" "$hash"
 }
 
@@ -3509,7 +3713,7 @@ checksums_verify() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
 
     # Verify all package checksums. This is achieved by generating a new set
     # of checksums and then comparing those with the old set.
@@ -3517,7 +3721,7 @@ checksums_verify() {
     // log "$pkg_name" "verifying sources"
 
     # Generate a new set of checksums to compare against.
-    local hash="$(// delegate -- "checksum_gen" "$pkg_name")"
+    local hash="$(delegate -- "checksum_gen" "$pkg_name")"
     // log '$hash' "$hash"
 
     # Intentional, globbing disabled.
@@ -3529,21 +3733,21 @@ checksums_verify() {
         // log '$hash' "${hash:+"${hash} [updated]"}"
         as_own "${checksums%/*}" touch "$checksums"
         for hash_item in $@; do
-            $(// delegate -- as_owner "${checksums%/*}") sh -c "printf '%s\n' \"$hash_item\" >> \"$checksums\"" ||
+            as_own "${checksums%/*}" sh -c "printf '%s\n' \"$hash_item\" >> \"$checksums\"" ||
             // die 'permission denied' "on writting version to file $checksums"
         done
     }
 
     # Check that the first column (separated by whitespace) match in both
     # checksum files. If any part of either file differs, mismatch. Abort.
-    null "$1" || while read -r check _ || ok "$1"; do
+    [ -z "${1:+x}" ] || while read -r check _ || [ -n "${1:+x}" ]; do
         # printf '%s\n%s\n' "- ${check:-missing}" "+ ${1:-no source}"
         // log '$check' "${check:-missing}"
         // log '$hash' "${1:-no source}"
-        equ "$1-${check:-null}" "$check-$1" ||
-        equ "$1-${check:-null}" "$1-SKIP" || {
-            [ -n "${KISS_FORCE:+x}" ] || // die "$pkg_name" "checksum mismatch"
-        }
+        local hash_item="${1:-"no source"}"
+        equ "$hash_item-${check:-null}" "$check-$hash_item" ||
+        equ "$hash_item-${check:-null}" "$hash_item-SKIP" ||
+        [ -n "${KISS_FORCE:+x}" ] || // die "$pkg_name" "checksum mismatch"
         shift "$(($# != 0))"
     done < "$checksums"
 }
@@ -3555,12 +3759,12 @@ conflicts() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
 
     // log "$pkg_name" "checking for package conflicts"
 
-    local manifest_files="$(// delegate -- slot_aquire "$pkg_name" "manifest-files")"
-    local found_conflicts="$(// delegate -- slot_aquire "$pkg_name" "found-conflicts")"
+    local manifest_files="$(delegate -- slot_aquire "$pkg_name" "manifest-files")"
+    local found_conflicts="$(delegate -- slot_aquire "$pkg_name" "found-conflicts")"
     local tar_man="$extract_dir/$pkg_name/$db/$pkg_name/manifest"
     [ -f "$tar_man" ] || // die "does not exist" "$tar_man"
     [ -s "$tar_man" ] || // die '$tar_man' "\"$tar_man\" is empty"
@@ -3599,13 +3803,13 @@ conflicts() {
 
     [ -s "$found_conflicts" ] || return 0
 
-    ! equ "$KISS_CHOICE" 1 || ! equ "$safe" 1 || {
+    [ -z "${KISS_CHOICE:+x}" ] || ! equ "$safe" 1 || {
         // log "Package '$pkg_name' conflicts with another package" "!>"
-        // log "Run 'KISS_CHOICE=1 kiss i $pkg_name' to add conflicts" "!>"
+        // log "Run 'KISS_CHOICE= kiss i $pkg_name' to add conflicts" "!>"
         // die "as alternatives." "!>"
     }
 
-    # ! equ "$KISS_CHOICE" 1 && equ "$safe" 1 && [ -s "$found_conflicts" ]
+    # [ -z "${KISS_CHOICE:+x}" ] && equ "$safe" 1 && [ -s "$found_conflicts" ]
     # This is a novel way of offering an "alternatives" system.
     # It is entirely dynamic and all "choices" are created and
     # destroyed on the fly.
@@ -3712,9 +3916,9 @@ file_rwx() {
     #
     # NOTE: This drops setgid/setuid permissions and does not include
     # them in the conversion. This is intentional.
-    unset oct o
+    local oct= o=
 
-    rwx="$(\ls -ld "$1")"
+    rwx="$(\ls -ld "$1" | awk '{print $1}')"
 
     for c in 14 22 31 44 52 61 74 82 91; do
         rwx="${rwx#?}"
@@ -3729,6 +3933,7 @@ file_rwx() {
             o=0
         esac
     done
+    printf '%s' "$oct"
 }
 
 pkg_install_files() {
@@ -3736,7 +3941,7 @@ pkg_install_files() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
     shift 1
     # Copy files and create directories (preserving permissions).
     # The 'test $1' will run with '-z' for overwrite and '-e' for verify.
@@ -3745,7 +3950,7 @@ pkg_install_files() {
             # Skip directories if they already exist in the file system.
             # (Think /usr/bin, /usr/lib, etc).
             [ -d "$_file" ] || {
-                // file_rwx "$2/${file#/}"
+                local oct="$(delegate -- file_rwx "$2/${file#/}")"
                 mkdir -m "$oct" "$_file"
             }
         ;;
@@ -3796,7 +4001,7 @@ pkg_remove_files() {
     # functions allows us to stop duplicating code.
     while read -r file; do
         case $file in /etc/?*[!/])
-            local hash="$(// delegate -- "sh256" "$KISS_ROOT/${file#/}")"
+            local hash="$(delegate -- "sh256" "$KISS_ROOT/${file#/}")"
 
             read -r sum_pkg <&3 ||:
 
@@ -3835,7 +4040,7 @@ pkg_etc() {
     local file="$1"
     local repo_url="$2"
     local pkg_name="${repo_url##*/}"
-    local hash="$(// delegate -- "sh256" "$extract_dir/$pkg_name/$file" "$KISS_ROOT/${file#/}")"
+    local hash="$(delegate -- "sh256" "$extract_dir/$pkg_name/$file" "$KISS_ROOT/${file#/}")"
 
     local sum_new="${hash%%"$newline"*}"
     local sum_sys="${hash#*"$newline"}"
@@ -3894,7 +4099,7 @@ pkg_remove() {
     local repo_url="$1"
     local pkg_name="${repo_url##*/}"
     local repo_target="$sys_db/$pkg_name"
-
+    // log '$repo_target' "$repo_target"
     # Remove a package and all of its files. The '/etc' directory is handled
     # differently and configuration files are *not* overwritten.
     [ -d "$repo_target" ] || // die '$pkg_name' "\"$pkg_name\" not installed"
@@ -3920,7 +4125,7 @@ pkg_remove() {
     [ ! -f "$repo_target/manifest" ] || {
         [ ! -s "$repo_target/etcsums" ] &&
         // pkg_remove_files < "$repo_target/manifest" || {
-            local etcsums_clone="$(// delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
+            local etcsums_clone="$(delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
             // pkg_remove_files < "$repo_target/manifest" 3< "$etcsums_clone"
         }
     }
@@ -3960,8 +4165,8 @@ installable() {
         // debug '$dep' "$dep"
         // debug '$sys_db' "$sys_db"
         case "$dep $dep_type" in [!\#]?*\ )
-            { { [ ! -d "$sys_db/$dep" ] || ! is_repo "$sys_db/$dep"; } &&
-                // log '$dep not found' "$dep"
+            { { [ -d "$sys_db/$dep" ] && is_repo "$sys_db/$dep"; } ||
+                // war '$dep not found' "$dep"
             } || continue
 
             // debug '$dep' "$dep"
@@ -3974,7 +4179,7 @@ installable() {
         esac
     done < "$depends"
     null "$missing" || // log '$missing' "$missing"
-    // debug '$3' "$3"
+    [ -z "${3:+x}" ] || // debug '$3' "$3"
     // debug '$missing' "$missing"
     case ${missing:-0} in [1-9]*)
         // die "$pkg_name" "not installable, missing $missing package(s)"
@@ -4034,7 +4239,7 @@ archive() (
     [ -z "${KISS_FORCE:+x}" ] &&
     // identical "$repo_target" "$repo_url" || {
         / "IFS=$'\x03' read -r ver rel repo_dir \
-            <<$(// delegate -- pkg_version "$repo_url")" > /dev/null ||
+            <<$(delegate -- pkg_version "$repo_url")" > /dev/null ||
         // die 'pkg_version' "failed"
 
         local version_dir="$ver-$rel"
@@ -4062,7 +4267,7 @@ archive() (
         // log '$reference' "$reference"
         [ "$repo_url" == "$reference" ] ||
         [ "$pkg_name" != "${reference##*/}" ] || {
-            prompt  "Delete the packages? \"$repo_url\""
+            prompt  "Delete the packages? '$repo_url'"
             \rm -rf "$repo_url"
         }
         repo_result="$reference"
@@ -4085,7 +4290,7 @@ is_in_main() (
     # So I made the fuction readonly
     local repo_in_main
     # // war '$kiss_path_repo_list_origin' "$kiss_path_repo_list_origin"
-    for repo_in_main in $(// delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH"); do
+    for repo_in_main in $(delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH"); do
         // debug '$repo_in_main' "${repo_in_main:+"${repo_in_main} "}inside pure pkg_find"
         [ "$repo_url" == "$repo_in_main" ] || continue
         result=0
@@ -4137,7 +4342,7 @@ pkg_install() {
         *.tar.*)
             // log 'tar $repo_url' "$repo_url"
             tar_file="$repo_url"
-            format="$(// delegate -- pkg_format "$repo_url")"
+            format="$(delegate -- pkg_format "$repo_url")"
             // log '$format' "$format"
 
             [ -f "$repo_url" ] || // die '$repo_url' "File '${repo_url:+"${repo_url} "}'does not exist"
@@ -4145,18 +4350,6 @@ pkg_install() {
             pkg_name="${repo_url##*/}"
             pkg_name="${pkg_name%@*}"
             // log '$pkg_name' "$pkg_name"
-            repo_url="$(// delegate -- pkg_find "$pkg_name")"
-            // log '$repo_url' "$repo_url"
-            [ -z "${repo_url##*"${sys_db}"*}" ] || repo_source="$repo_url"
-            [ -n "$repo_source" ] || {
-                / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-                    <<$(// delegate -- pkg_version "$pkg_name" "" "" "$pkg_dir/$pkg_name/$db")" > /dev/null ||
-                // die 'pkg_version' "failed"
-                repo_source="$repo_dir/$pkg_name"
-                [ -n "$repo_source" ] ||
-                // repo_source="$(delegate -- pkg_find "$pkg_name" "" "-d" "$KISS_PATH")"
-                // log '$repo_source' "$repo_source [first encountered]"
-            }
             ;;
 
         *)
@@ -4165,49 +4358,29 @@ pkg_install() {
             repo_url="$(standardize "$repo_url")"
             pkg_name="${repo_url##*/}"
             is_repo "$repo_url" ||
-                repo_url="$(// delegate -- pkg_find "$pkg_name")"
-            format="$(// delegate -- pkg_format "$repo_url")"
-            // log '$format' "$format"
-            [ -z "${repo_url##*"${sys_db}"*}" ] || repo_source="$repo_url"
-            // tar_file="$(// delegate -- pkg_cache "$repo_url")"
+                repo_url="$(delegate -- pkg_find "$pkg_name")"
+
+            # Have to permit $sys_db
+            # [ -z "${repo_url##*"${sys_db}"*}" ] ||
+            ! is_repo "$repo_url" || repo_source="$repo_url"
+
+            // tar_file="$(delegate -- pkg_cache "$repo_url")"
             ok "$tar_file" || {  # // die "$pkg_name" "not yet built"
                 { action=c; ! // checksum  "$pkg_name" > /dev/stderr 2>&1; } ||
                 { action=b; ! // build_all "$pkg_name" > /dev/stderr 2>&1; } ||
-                // tar_file="$(// delegate -- pkg_cache "$repo_url")"
+                // tar_file="$(delegate -- pkg_cache "$repo_url")"
                 ok "$tar_file" || // die "$pkg_name" "build failed"
-            }
-            [ -n "$repo_source" ] || {
-                // repo_source="$(delegate -- pkg_find "$pkg_name" "" "-d" "$KISS_PATH")"
-                [ -n "$repo_source" ] ||
-                / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-                    <<$(// delegate -- pkg_version "$repo_url" "" "" "$pkg_dir/$pkg_name/$db")" > /dev/null ||
-                // die 'pkg_version' "failed"
-                repo_source="$repo_dir/$pkg_name"
-                // log '$repo_source' "$repo_source [first encountered]"
             }
             ;;
     esac
 
     repo_target="$sys_db/$pkg_name"
 
-    [ -d "$repo_source" ] || // die '$repo_source' "dir $repo_source does not exist"
-
     // pkg_dirs "$action" "$pkg_name"
 
-    // identical "$repo_target" "$repo_source" || {
-        # Passing array to --exclude won't work on POSIX shell
-        rsync -aqzL "$repo_source/." --exclude="keys" --exclude="manifest" --delete --delete-excluded "$repo_target/"
-        sync
-    }
-
     // log '$pkg_name' "$pkg_name"
-    // log '$repo_source' "$repo_source"
     // log '$repo_target' "$repo_target"
     // log '$extract_dir/$pkg_name' "$extract_dir/$pkg_name"
-
-    [ -d "$repo_target" ] &&
-    // identical "$repo_target" "$repo_source" ||
-        // die '$repo_target' "${repo_target:+"${repo_target} "}is invalid"
 
     // mkcd "$extract_dir/$pkg_name"
 
@@ -4234,7 +4407,7 @@ pkg_install() {
 
     # Intended behavior.
     # shellcheck disable=2030,2031
-    equ "$KISS_FORCE" 1 || {
+    [ -n "${KISS_FORCE:+x}" ] || {
         // manifest_validate "$pkg_name"
         // installable "$pkg_name" "$extract_dir/$pkg_name/$db/$pkg_name/depends"
     }
@@ -4250,13 +4423,13 @@ pkg_install() {
     // log "$pkg_name" "installing package (${tar_file##*/})"
 
 
-    local manifest_diff="$(// delegate -- slot_aquire "$pkg_name" "manifest-diff")"
+    local manifest_diff="$(delegate -- slot_aquire "$pkg_name" "manifest-diff")"
     // log '$manifest_diff' "$manifest_diff"
 
     # If the package is already installed (and this is an upgrade) make a
     # backup of the manifest and etcsums files.
     [ ! -f  "$repo_target/manifest" ] || {
-        local manifest="$(// delegate -- slot_push "$pkg_name" "$repo_target/manifest")"
+        local manifest="$(delegate -- slot_push "$pkg_name" "$repo_target/manifest")"
         // log '$manifest' "$manifest"
 
         # Generate a list of files which exist in the currently installed manifest
@@ -4278,7 +4451,7 @@ pkg_install() {
     local remove="< \"$manifest_diff\""
     local second_run="\"$pkg_name\" -e \"$extract_dir/$pkg_name\" < \"$manifest_reverse\""
     [ ! -f "$repo_target/etcsums" ] || {
-        local etcsums_clone="$(// delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
+        local etcsums_clone="$(delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
         // log '$etcsums_clone'  "$etcsums_clone"
         first_run="$first_run 3< \"$etcsums_clone\""
         remove="$remove 3< \"$etcsums_clone\""
@@ -4315,6 +4488,40 @@ pkg_install() {
     // run_hook_pkg post-install "$pkg_name"
     // run_hook     post-install "$pkg_name" "$repo_target"
 
+    [ -z "${repo_url:+x}" ] ||
+    [ -n "${repo_url##*".tar."*}" ] || {
+        / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
+                    <<$(delegate -- pkg_version "$pkg_name" "" "" "$pkg_dir/$pkg_name/$db")" > /dev/null ||
+        // die 'pkg_version' "failed"
+
+        if [ -d "$repo_dir" ]; then
+            repo_url="$repo_dir/$pkg_name"
+        else
+            repo_url="$pkg_dir/$pkg_name/$db/$pkg_name"
+        fi
+        // log '$repo_url' "$repo_url"
+        # [ -z "${repo_url##*"${sys_db}"*}" ] ||
+        ! is_repo "$repo_url" || repo_source="$repo_url"
+    }
+
+    format="$(delegate -- pkg_format "$repo_url")"
+    // log '$format' "$format"
+
+    [ -d "$repo_source" ] || // die '$repo_source' "dir $repo_source does not exist"
+
+    // log '$repo_source' "$repo_source"
+
+    // identical "$repo_target" "$repo_source" || {
+        # Passing array to --exclude won't work on POSIX shell
+        rsync -aqzL "$repo_source/." --exclude="keys" --exclude="manifest" --delete --delete-excluded "$repo_target/"
+        sync
+    }
+
+    [ -d "$repo_target" ] &&
+    // identical "$repo_target" "$repo_source" ||
+        // die '$repo_target' "${repo_target:+"${repo_target} "}is invalid"
+
+
     // log '$sys_db' "$sys_db"
     // log '$extract_dir' "$extract_dir"
     # $HOME/.cache/kiss/proc/$pkg_name/extract
@@ -4328,7 +4535,7 @@ pkg_install() {
     [ -d "$pkg_dir/$pkg_name/$db/$pkg_name" ] || // die "$pkg_dir/$pkg_name/$db/$pkg_name" "does not exist"
 
     / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-        <<$(// delegate -- pkg_version "${repo_source}")" > /dev/null ||
+        <<$(delegate -- pkg_version "${repo_source}")" > /dev/null ||
     // die 'pkg_version' "failed"
     # https://www.shellcheck.net/wiki/SC2316
     // log '$repo_ver' "$repo_ver"
@@ -4374,21 +4581,21 @@ pkg_install() {
     # $REPO_MAIN/system/crust
     is_in_main "$repo_source" || {
         local repo_in_main
-        local main_list="$(// delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH")"
+        local main_list="$(delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH")"
         # REPO_DIR does not make sence at this moment
         # null "$REPO_DIR" || main_list="${REPO_DIR}/$pkg_name $main_list"
-        for repo_in_main in $(// delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH"); do
+        for repo_in_main in $(delegate -- pkg_find "$pkg_name" "pure" "-d" "$KISS_PATH"); do
             index_global="$((index_global + 1))"
+            [ -n "${repo_in_main:+x}" ] || continue
             [ "${repo_in_main##*/}" == "$pkg_name" ] || continue
-            # null "${REPO_DIR##*"${archive_main}"*}" ||
             ok "${repo_in_main##*"${repo_archive}"*}" || // die '$repo_in_main' "$repo_in_main [$index_global]"
             ok "${repo_in_main##*"${sys_db}"*}" || { // war '$repo_in_main' "$repo_in_main [$index_global] came from $sys_db"; continue; }
             // log '$repo_in_main' "$repo_in_main [$index_global]"
             // log '$repo_source' "$repo_source"
-            # null "${REPO_DIR##*"${archive_main}"*}" ||
+            [ -z "${repo_source:+x}" ] ||
             ok "${repo_source##*"${repo_archive}"*}" || // die '$repo_source' "$repo_source [$index_global]"
 
-            repo_source="$(// delegate -- archive "$repo_archive" "$repo_in_main" "$repo_source" "$index_global")"
+            repo_source="$(delegate -- archive "$repo_archive" "$repo_in_main" "$repo_source" "$index_global")"
             ! // is_in_main "$repo_source" && [ -d "$repo_in_main" ] || continue
 
             # Guaranteed performance with step-by-step filtering
@@ -4398,10 +4605,9 @@ pkg_install() {
                 # First run
                 # If identical, and repo_source is not in main repo list, get it
                 / "IFS=$'\x03' read -r ver rel repo_dir \
-                <<$(// delegate -- pkg_version "$repo_in_main")" > /dev/null ||
+                <<$(delegate -- pkg_version "$repo_in_main")" > /dev/null ||
                 // die 'pkg_version' "failed"
                 // log "${pkg_name}" "$repo_in_main [$ver-$rel] [$repo_dir/$pkg_name]"
-                # null "${REPO_DIR##*"${archive_main}"*}" ||
                 ok "${repo_in_main##*"${repo_archive}"*}" || // die '$repo_in_main' "$repo_in_main [$index_global]"
                 repo_source="$repo_in_main"
                 continue
@@ -4410,8 +4616,7 @@ pkg_install() {
             # key matched/conflicts repos has different content with repo_source
             # Key conflicts and content does not match / inconsistency
             # First run
-            repo_source="$(// delegate -- archive "$repo_archive" "$repo_in_main" "$repo_target" "$index_global")"
-            # null "${REPO_DIR##*"${archive_main}"*}" ||
+            repo_source="$(delegate -- archive "$repo_archive" "$repo_in_main" "$repo_target" "$index_global")"
             ok "${repo_in_main##*"${repo_archive}"*}" || // die '$repo_in_main' "$repo_in_main [$index_global]"
 
             // log "${pkg_name} imported" "$repo_in_main [$ver-$rel]"
@@ -4435,25 +4640,41 @@ pkg_install() {
     is_in_main "$repo_source" || // die '$repo_source' "${repo_source:+"${repo_source} "}is weird imported"
 
     local repo_source_encoded="$(delegate -- encode "$repo_source" "REPO_MAIN" "$REPO_MAIN")"
-
+    repo_source_encoded="$(standardize "$repo_source_encoded")"
+    repo_dir_encoded="${repo_source_encoded%/*}"
+    // log '$repo_target' "$repo_target"
     // log '$repo_source' "$repo_source"
+    // log '$repo_dir_encoded' "$repo_dir_encoded"
+    // log '$repo_source_encoded' "$repo_source_encoded"
+
+    printf '%s %s %s\n' "$repo_ver" "$repo_rel" "$repo_dir_encoded" > "$repo_source/version"
+    printf '%s %s %s\n' "$repo_ver" "$repo_rel" "$repo_dir_encoded" > "$repo_target/version"
 
     local index_key=0
     local version_list=
 
+    # Keys design begin
     IFS_ORIGIN=$IFS
     IFS="$(printf '%b' "\x03")"
     [ ! -s "$repo_target/keys" ] ||
     while IFS=$' ' read -r ver rel repo; do
         null "$ver" || null "$rel" || null "$repo" ||
-        { [ "$ver" = "$repo_ver" ] && [ "$rel" = "$repo_rel" ] && [ "$repo" = "$repo_source" ]; } ||
-        [ -z "${version_list##*"${ver}"*"${rel}"*"${repo}"*}" ] || {
-            length_trim "ver" "$LENGTH_VER"
-            length_trim "rel" "$TABSTOP"
-            local c2_origin="$c2"
-            // log "$(printf "%-${TABSTOP}s %-${LENGTH_VER}s" "$index_key" "$ver")" "$(printf "%-${TABSTOP}s %-2s %s" "$rel" "" "$repo")"
-            c2="$c2_origin"
-            version_list="$version_list${ver} ${rel} ${repo}${IFS}"
+        { [ "$ver" = "$repo_ver" ] && [ "$rel" = "$repo_rel" ] && [ "$repo" = "$repo_source" ]; } || {
+            local found=0
+            for item in $version_list; do
+                [ "$item" == "${ver} ${rel} ${repo}" ] || continue
+                found=1
+                break
+            done
+            equ "$found" "1" || {
+                length_trim "ver" "$LENGTH_VER"
+                length_trim "rel" "$TABSTOP"
+                local c2_origin="$c2"
+                # // log "$(printf "%-${TABSTOP}s %-${LENGTH_VER}s" "$index_key" "$ver")" "$(printf "%-${TABSTOP}s %-2s %s" "$rel" "" "$repo")"
+                // density_output "$pkg_name" "$repo" "$repo_source" "$index_key"
+                c2="$c2_origin"
+                version_list="$version_list${ver} ${rel} ${repo}${IFS}"
+            }
         }
         : $((index_key += 1))
     done < "$repo_target/keys"
@@ -4466,14 +4687,25 @@ pkg_install() {
     IFS=$IFS_ORIGIN
 
     [ -f "$repo_target/keys" ] || // die '$repo_target/keys' "\"$repo_target/keys\" should exist but not"
-    local tail_deep="$(// delegate -- valid_tail "$repo_target/keys")"
+    local tail_deep="$(delegate -- valid_tail "$repo_target/keys")"
     [ -n "${tail_deep:+x}" ] || // die '$repo_target/keys' "keys file \"$repo_target/keys\" is invalid"
     IFS=$' ' read -r _ver _rel _repo_source \
         < <(tail -n "$tail_deep" "$repo_target/keys" | grep "$repo_ver" | grep "$repo_rel") > /dev/null || {
         cat "$repo_target/keys"
         // die '$repo_target/keys' "query failed on \"$repo_target/keys\""
     }
-    [ "$_repo_source" == "$repo_source_encoded" ] || // die '$_repo_source' "$_repo_source"
+    # Keys design end
+    // log '$pkg_name' "$pkg_name"
+    / "IFS=$'\x03' read -r ver rel repo_dir_decoded \
+        <<$(delegate -- pkg_version "$pkg_name" "" "-d" "$sys_db")" > /dev/null ||
+        // die 'pkg_version' "failed"
+
+    [ -n "${repo_dir_decoded:+x}" ] &&
+    [ -d "$repo_dir_decoded" ] || // die '$repo_dir_decoded' "'$repo_dir_decoded' directory does not exist"
+
+    [ "$repo_dir_decoded/$pkg_name" == "$repo_source" ] &&
+    [ "$repo_ver" == "$ver" ] && [ "$repo_rel" == "$rel" ] && [ -d "$repo_dir_decoded/$pkg_name" ] ||
+    // die '$repo_dir_decoded/$pkg_name' "$repo_dir_decoded/$pkg_name"
 
     // density_output "$pkg_name" "$repo_target" "$repo_source" "0"
     // density_output "$pkg_name" "$repo_source" "$repo_source" "1"
@@ -4527,11 +4759,11 @@ pkg_update_repo() {
         // log '$PWD' "$PWD"
 
         IFS=$'\x03' read -r  pwd_user _  \
-            < <(// delegate -- am_owner "$PWD") > /dev/null ||
+            < <(delegate -- am_owner "$PWD") > /dev/null ||
             // die 'am_owner' "failed"
         equ "pwd_user" "$(whoami)" || {
             // log 'needs "$user" to update to' "$pwd_user"
-            local as_pwd_user="$(// delegate -- as_user "$pwd_user")"
+            local as_pwd_user="$(delegate -- as_user "$pwd_user")"
             set -- "$as_pwd_user"
         }
 
@@ -4575,7 +4807,7 @@ pkg_upgrade() {
     for pkg_name in "$sys_db/"*; do set -f
         // pkg_dirs "$action" "$pkg_name"
         / "IFS=$'\x03' read -r ver_pre rel_pre repo_dir \
-            <<$(// delegate -- pkg_version "${pkg_name##*/}" "" "" "$sys_db")" \
+            <<$(delegate -- pkg_version "${pkg_name##*/}" "" "" "$sys_db")" \
             > /dev/null || // die 'pkg_version' "failed"
 
         # Detect repository orphans (installed packages with no
@@ -4585,7 +4817,7 @@ pkg_upgrade() {
         esac
 
         / "IFS=$'\x03' read -r repo_ver repo_rel repo_dir \
-            <<$(// delegate -- pkg_version "${pkg_name##*/}")" > /dev/null || // die 'pkg_version' "failed"
+            <<$(delegate -- pkg_version "${pkg_name##*/}")" > /dev/null || // die 'pkg_version' "failed"
 
         # Compare installed packages to repository packages.
         equ "$ver_pre-$rel_pre" "$repo_ver-$repo_rel" || {
@@ -4606,7 +4838,7 @@ pkg_upgrade() {
         // log "package manager update" "detected"
         // log "the package manager" "will be updated first"
 
-        // prompt
+        // prompt "Upgrade kiss first"
         // build_all kiss
 
         // log "the package manager" "updated"
@@ -4615,7 +4847,7 @@ pkg_upgrade() {
     }
 
     for _ do
-        IFS=$'\x03' read -r order redro < <(// delegate -- pkg_order "$@") > /dev/null ||
+        IFS=$'\x03' read -r order redro < <(delegate -- pkg_order "$@") > /dev/null ||
             // die 'pkg_order' "failed"
 
         # Intentional, globbing disabled.
@@ -4646,8 +4878,7 @@ clean_all() {
     local action="$1"
     shift 1
     # Second parameter is index
-    ! { [ "$action" == "pick" ] || [ "$action" == "p" ] ||
-    [ "$action_of_session" == "pick" ] || [ "$action_of_session" == "p" ]; } || set -- "$1"
+    ! single_pick "$action" || set -- "$1"
     for repo_url in $@; do
         local pkg_name="${repo_url##*/}"
         [ -n "${pkg_name:+x}" ] || // die '$pkg_name' "\"$pkg_name\" is wrong calculated"
@@ -4657,18 +4888,18 @@ clean_all() {
         // log '$pkg_name' "$pkg_name"
         [ -d "$proc_root" ] || // die '$proc_root' "$proc_root"
         // debug '$extract_dir' "$extract_dir"
-        // debug '$KISS_DEBUG' "$KISS_DEBUG"
+        // debug '$KISS_DEBUG' "${KISS_DEBUG:-""}"
         // debug '$_KISS_LVL' "$_KISS_LVL"
 
         case $action in
             i|install)
-                // log_permanent_all "$action" "$pkg_name"
+                // log_permanent_all "$log_output" "$action" "$pkg_name"
         esac
 
-        case ${KISS_DEBUG:-0}-${_KISS_LVL:-1} in
-            0-1) [ -z "${proc_root:+x}" ] || [ "$(standardize "$proc_root")" = "/proc" ] ||
+        case ${KISS_DEBUG:-""}-${_KISS_LVL:-1} in
+            -1) [ -z "${proc_root:+x}" ] || [ "$(standardize "$proc_root")" = "/proc" ] ||
                 // pkg_clear "$action" "$repo_url" ;;
-            0-*) [ -z "${extract_dir:+x}" ] || [ "$extract_dir" == "/" ] || [ "$(// occurrences "$extract_dir" "/")" -le "1" ] ||
+            -*) [ -z "${extract_dir:+x}" ] || [ "$extract_dir" == "/" ] || [ "$(// occurrences "$extract_dir" "/")" -le "1" ] ||
                 [ "$(// occurrences "$extract_dir/$pkg_name" "/")" -le "1" ] ||
                 as_own "$extract_dir" find "$extract_dir/$pkg_name" -mindepth 1 -delete
         esac
@@ -4683,7 +4914,7 @@ pkg_help_ext() {
 
     # Intentional, globbing disabled.
     # shellcheck disable=2046,2030,2031
-    set -- $(// delegate -- pkg_find kiss-\* all -x "$PATH")
+    set -- $(delegate -- pkg_find kiss-\* all -x "$PATH")
     ok "$1" || // die 'kiss-*' "$1"
 
     local path_list
@@ -4728,6 +4959,34 @@ pkg_help_ext() {
     IFS=$IFS_ORIGIN
 }
 
+# children_kill $$ > /dev/null 2>&1
+children_kill() {
+    local pid="${1}"
+    local self="${2:-false}"
+
+    ! children="$(pgrep -P "$pid" 2>/dev/null)" ||
+    for child in $children; do
+        [ -z "$(ps -ef | grep "$child" | grep -v grep)" ] ||
+            // children_kill "$child" true
+    done
+
+    [ "$self" != true ] ||
+        [ -z "$(ps -ef | grep "$pid" | grep -v grep)" ] ||
+            (as "root" kill -s SIGTERM "$pid" || (sleep 10 && as "root" kill -9 "$pid" &)) > /dev/null 2>&1
+}
+
+# The following also works but will kill the shell itself on BSD.
+# Example lanch from within script
+# subtree_kill $$ > /dev/null 2>&1
+subtree_kill() {
+    local parent="${1}"
+    ! list="$(ps -o pid="$parent")" ||
+    for child in $list; do
+        [ "$$" -eq "$child" ] ||
+            (as "root" kill -s SIGTERM "$child" || (sleep 10 && as "root" kill -9 "$child" & )) > /dev/null 2>&1
+    done
+}
+
 trap_on() {
     # Catch errors and ensure that build files and directories are cleaned
     # up before we die. This occurs on 'Ctrl+C' as well as success and error.
@@ -4736,17 +4995,20 @@ trap_on() {
 }
 
 on_int() {
+    export KISS_DEBUG=1
     // run_hook SIGINT
     exit 1
 }
 
 on_exit() {
+    export KISS_DEBUG=1
     # For debugging, we don't delete the crime scene immediately
     # // clean_all "$@"
     // run_hook SIGEXIT
     // pipe_read_kill "$pid_log" &
     // pipe_read_kill "$pid_screen" &
-    kill 0
+    kill 0 ||
+    // children_kill "$KISS_PID"
 }
 
 trap_off() {
@@ -4809,13 +5071,15 @@ pkg_format() {
     // debug '$repo_url' "$repo_url"
     local pkg_name="${repo_url##*/}"
     is_repo "$repo_url" ||
-        repo_url="$(// delegate -- pkg_find "$pkg_name")"
-    local format
+        repo_url="$(delegate -- pkg_find "$pkg_name")"
+    local format=
 
     // debug '$pkg_name' "$pkg_name"
     case "$pkg_name" in
         *.tar|*.tar.??|*.tar.???|*.tar.????|*.t?z)
-            format="${_res##*.}"
+            local src_name="${pkg_name##*/}"
+            src_name="${src_name%\?*}"
+            format="${src_name##*.}"
             printf "%s" "$format"
             return 0
     esac
@@ -4831,9 +5095,16 @@ pkg_format() {
         // debug '$src_url' "$src_url"
         // debug '$dest' "$dest"
         case $src_url in
-            "url+"*) format="${_res##*.}";;
-            "git+"*) format="git";;
-            *) format="${_res##*.}";;
+            "git+"*)
+                format="git";;
+            # *"://"*)
+            #     local src_name="${src_url##*/}"
+            #     src_name="${src_name%\?*}"
+            #     format="${src_name##*.}";;
+            *)
+                local src_name="${src_url##*/}"
+                src_name="${src_name%\?*}"
+                format="${src_name##*.}";;
         esac
         break
     done < "$repo_url/sources"
@@ -4848,6 +5119,7 @@ repo_resolve() {
     _
     local pkg_name
     local repo_url="$1"
+    [ -n "${repo_url:+x}" ] || // die '$repo_url' "\"$repo_url\" is invalid"
     // debug '$repo_url' "$repo_url"
     local search_dir="$2"
     // debug '$search_dir' "$search_dir"
@@ -4883,7 +5155,7 @@ repo_resolve() {
 
         [ -n "${repo_dir:+x}" ] || {
             # pkg_find will search $sys_db also
-            repo_url_output="$(// delegate -- pkg_find "$pkg_name" "" "-d" "$search_dir")"
+            repo_url_output="$(delegate -- pkg_find "$pkg_name" "" "-d" "$search_dir")"
             repo_dir="${repo_url_output%/*}"
             printf '%s\x03%s\x03%s' "$pkg_name" "$repo_dir" "$repo_url_output"
             return 0
@@ -4909,7 +5181,7 @@ repo_resolve() {
 
     [ -n "${repo_dir:+x}" ] || {
         # pkg_find will search $sys_db also
-        repo_url_output="$(// delegate -- pkg_find "$pkg_name" "" "-d" "$KISS_PATH")"
+        repo_url_output="$(delegate -- pkg_find "$pkg_name" "" "-d" "$KISS_PATH")"
         repo_dir="${repo_url_output%/*}"
         printf '%s\x03%s\x03%s' "$pkg_name" "$repo_dir" "$repo_url_output"
         return 0
@@ -4930,6 +5202,7 @@ repo_resolve_no_subshell() {
     _
     [ "$1" == "_" ] || [ -z "$1" ] || local pkg_name_name="${1#*" "}"
     local repo_url="$2"
+    [ -n "${repo_url:+x}" ] || // die '$repo_url' "\"$repo_url\" is invalid"
     // debug '$repo_url' "$repo_url"
 
     repo_url="$(standardize "$repo_url")"
@@ -4997,7 +5270,7 @@ pipe_read() {
     local target="$2"
     local pipe="$3"
     # set --
-    # [ "$log_dir_user" == "$(whoami)" ] || set -- $(// delegate -- as_user "$log_dir_user")
+    # [ "$log_dir_user" == "$(whoami)" ] || set -- $(delegate -- as_user "$log_dir_user")
     # // bog "$log_output" '$@' "$(esceval "$@")"
     local pipe_user="$(stat -c '%U' "$pipe")"
     [ "$pipe_user" == "$(whoami)" ] || // war "$pipe_user owns" "$pipe"
@@ -5010,10 +5283,10 @@ pipe_read() {
             # [ -z "$content" ] || "$@" flock -x "$lock" -c "$("$@" printf '%s\n' "$content" >> "$target")"
             [ -z "$content" ] || {
                 flock -x "$lock" -c "$(printf '%s\n' "$content" >> "$target")"
-                [ -n "${content##*"ERROR"*}" ] || {
+                [ -n "${content##*"ERR"*}" ] || {
                     printf '%s\n' "$content" > /dev/stderr
                     printf '%s\n' "$content" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' >> "$log_output" 2>&1
-                    kill 0
+                    kill 0 || // children_kill "$KISS_PID"
                 }
             }
         done < "$pipe" || // die "$pipe" "reading failed"
@@ -5021,15 +5294,17 @@ pipe_read() {
 }
 
 log_address() {
+    ___
     local level=-1
     [ "$level" -eq "-1" ] || _
 
     # Neither the log folder nor the file is created at this moment. So don't use log functions
-    [ -n "${KISS_TMPDIR:+x}" ] || KISS_TMPDIR="/tmp/${HOME:1}/kiss"
+    # [ -n "${KISS_TMPDIR:+x}" ] ||
+    KISS_TMPDIR="/tmp/$(whoami)/kiss"
     [ -d "$KISS_TMPDIR" ] || mkdir -p "$KISS_TMPDIR"
 
     # The log folder is created
-    [ -n "${KISS_TMPDIR:+x}" ] || KISS_TMPDIR="/tmp/${HOME:1}/kiss"
+    find_tip="find log at"
     log_dir="$KISS_TMPDIR/logs"
     [ -d "$log_dir" ] || mkdir -p "$log_dir"
     log_output="$log_dir/build.log"
@@ -5061,7 +5336,7 @@ log_address() {
     lock_file="$log_dir/.lock"
     lock_print="$log_dir/.lock_print"
     # set --
-    # [ "$log_dir_user" == "$(whoami)" ] || set -- $(// delegate -- as_user "$log_dir_user")
+    # [ "$log_dir_user" == "$(whoami)" ] || set -- $(delegate -- as_user "$log_dir_user")
     # // bog "$log_output" '$@' "$(esceval "$@")"
     [ ! -e "$log_pipe" ] || rm -f -- "$log_pipe"
     [ ! -e "$screen_pipe" ] || rm -f -- "$screen_pipe"
@@ -5084,7 +5359,7 @@ log_address() {
 
 
 init_dirs() {
-    local level=-1
+    local level=0
     [ "$level" -eq "-1" ] || _
     local ppwd="$1"
     shift 1
@@ -5109,7 +5384,7 @@ init_dirs() {
     KISS_ROOT=${KISS_ROOT%"${KISS_ROOT##*[!/]}"}
     [ -n "${kiss_root_user:+x}" ] ||
     IFS=$'\x03' read -r  kiss_root_user _ \
-        < <(// delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
+        < <(delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
     # This allows for automatic setup of a KISS chroot and will
     # do nothing on a normal system.
     [ -d "$KISS_ROOT/" ] ||
@@ -5142,6 +5417,35 @@ init_dirs() {
     # : "${share_archive:="$KISS_SRC_ROOT/archive"}"
     // share_link "share_archive" "archive_dir" "$KISS_SRC_ROOT" "$src_user" "$cache_dir" "archive"
 
+    [ ! -L "$proc_root" ] || proc_root="$(readlink -f "$proc_root")"
+
+    # Temporary cache directories.
+    make_dir="$proc_volatile/make"
+    tmp_dir="$proc_volatile/tmp"
+    # log_dir="$proc_volatile/logs"
+
+    pkg_dir="$proc_root/pkg"
+    extract_dir="$proc_root/extract"
+    bin_dir="$proc_root/bin"
+    tar_dir="$proc_root/tar"
+
+
+    # set +e will bypass the following line and without exit
+    # [ -d "${proc_root}" ] && equ "reset" "$2" && \rm -rf "$proc_root" && exit 1
+
+    # Using 'as $some_dir_to_be_made_user' of 'as_owner "$some_dir_to_be_made"' all will fail because they pick up
+    # the new $some_dir_to_be_made to display content. But that location does not exist yet
+    mkdir -p \
+        "$make_dir" \
+        "$tmp_dir"
+
+    # "$log_dir" \
+
+    as "$src_user" mkdir -p \
+        "$pkg_dir" \
+        "$extract_dir" \
+        "$tar_dir" \
+        "$bin_dir"
 
     // log '$(whoami)' "$(whoami)"
     // log '$LOGNAME' "$LOGNAME"
@@ -5195,13 +5499,13 @@ transfer() {
     _
     target_dir="$1"
     root_dir_user="$2"
-    target_dir_user="$3"
+    dir_user="$3"
     root_dir_group="$4"
 
-    // / as "$target_dir_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
-    // / as "$root_dir_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+    // as "$dir_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+    // as "$root_dir_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
     # Hard code root is not good
-    // / as "$kiss_root_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+    // as "$kiss_root_user" chown -R "$root_dir_user":"$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
     // die "chown ${target_dir}" "failed"
 }
 
@@ -5214,7 +5518,7 @@ ownership() {
     [ ! -L "$target_dir" ] || target_dir="$(readlink -f "$target_dir")"
     shift $#
     IFS=$'\x03' read -r root_dir_user root_dir_group \
-        < <(// delegate -- am_owner "$root_dir") > /dev/null ||
+        < <(delegate -- am_owner "$root_dir") > /dev/null ||
         // die 'am_owner' "failed"
 
     // debug '$root_dir' "$root_dir"
@@ -5222,19 +5526,19 @@ ownership() {
     // debug '$root_dir_user' "$root_dir_user"
 
     if [ -d "$target_dir" ]; then
-        IFS=$'\x03' read -r target_dir_user target_dir_group \
-            < <(// delegate -- am_owner "$target_dir") > /dev/null ||
+        IFS=$'\x03' read -r dir_user dir_group \
+            < <(delegate -- am_owner "$target_dir") > /dev/null ||
         // die 'am_owner' "failed"
 
-        { equ "$target_dir_user" "$root_dir_user" && equ "$target_dir_group" "$root_dir_group"; } || {
-            if equ "$target_dir_user" "$root_dir_user"; then
-                // / as "$target_dir_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
-                // / as "$root_dir_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+        { equ "$dir_user" "$root_dir_user" && equ "$dir_group" "$root_dir_group"; } || {
+            if equ "$dir_user" "$root_dir_user"; then
+                // as "$dir_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+                // as "$root_dir_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
                 # Hard code root is not good
-                // / as "$kiss_root_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
+                // as "$kiss_root_user" chgrp -R "$root_dir_group" "${target_dir}" > /dev/null 2>&1 ||
                 // die "chgrp ${target_dir}" "failed"
             else
-                // transfer "${target_dir}" "$root_dir_user" "$target_dir_user" "$root_dir_group"
+                // transfer "${target_dir}" "$root_dir_user" "$dir_user" "$root_dir_group"
             fi
         }
 
@@ -5260,7 +5564,7 @@ ownership() {
         [ "$found_folder_onwership_issue" -eq "0" ] ||
         // transfer "${target_dir}" "$root_dir_user" "$item_user" "$root_dir_group"
     else
-        // / as "$root_dir_user" mkdir -p "$target_dir"
+        // as "$root_dir_user" mkdir -p "$target_dir"
     fi
 }
 
@@ -5275,60 +5579,28 @@ pkg_dirs() {
 
     [ -n "${src_user:+x}" ] ||
     IFS=$'\x03' read -r  src_user _ \
-        < <(// delegate -- am_owner "$KISS_SRC_ROOT") > /dev/null ||
+        < <(delegate -- am_owner "$KISS_SRC_ROOT") > /dev/null ||
     // die 'am_owner' "failed"
 
     // debug '$pkg_name' "$pkg_name"
     {
         ok "$log_dir" || // die '$log_dir' "${log_dir:+"${log_dir} "} is not defined"
 
-        local as_src_user="$(// delegate -- as_user "$src_user")"
-        [ ! -L "$proc_root" ] || proc_root="$(readlink -f "$proc_root")"
-
-        # Temporary cache directories.
-        make_dir="$proc_volatile/make"
-        tmp_dir="$proc_volatile/tmp"
-        # log_dir="$proc_volatile/logs"
-
-        pkg_dir="$proc_root/pkg"
-        extract_dir="$proc_root/extract"
-        bin_dir="$proc_root/bin"
-        tar_dir="$proc_root/tar"
-
-
-        # set +e will bypass the following line and without exit
-        # [ -d "${proc_root}" ] && equ "reset" "$2" && \rm -rf "$proc_root" && exit 1
-
-        # Using 'as $some_dir_to_be_made_user' of 'as_owner "$some_dir_to_be_made"' all will fail because they pick up
-        # the new $some_dir_to_be_made to display content. But that location does not exist yet
-        mkdir -p \
-            "$make_dir" \
-            "$tmp_dir"
-
-            # "$log_dir" \
-
-        $as_src_user mkdir -p \
-            "$pkg_dir" \
-            "$extract_dir" \
-            "$tar_dir" \
-            "$bin_dir"
-
         [ ! -d "${proc_root}" ] || [ -z "${pkg_name:+x}" ] || {
-            // ownership "$pkg_dir" "$pkg_dir/$pkg_name"
-            // ownership "$extract_dir" "$extract_dir/$pkg_name"
-            // ownership "$tar_dir" "$tar_dir/$pkg_name"
-            // ownership "$bin_dir" "$bin_dir/$pkg_name"
-            // ownership "$src_dir" "$src_dir/$pkg_name"
-            // ownership "$archive_dir" "$archive_dir/$pkg_name"
+            # // ownership "$pkg_dir" "$pkg_dir/$pkg_name"
+            # // ownership "$extract_dir" "$extract_dir/$pkg_name"
+            # // ownership "$tar_dir" "$tar_dir/$pkg_name"
+            # // ownership "$bin_dir" "$bin_dir/$pkg_name"
+            # // ownership "$src_dir" "$src_dir/$pkg_name"
+            # // ownership "$archive_dir" "$archive_dir/$pkg_name"
 
             // pkg_clear "$action" "$repo_url"
 
             mkdir -p \
                 "$tmp_dir/$pkg_name" \
                 "$make_dir/$pkg_name"
-            # // die '$pkg_dir/$pkg_name' "$pkg_dir/$pkg_name"
-            # // die '$as_src_user' "$as_src_user"
-            / "$as_src_user" mkdir -p \
+
+            as "$src_user" mkdir -p \
                 "$pkg_dir/$pkg_name" \
                 "$extract_dir/$pkg_name" \
                 "$tar_dir/$pkg_name" \
@@ -5351,23 +5623,32 @@ pkg_dirs() {
     # printf "%s" "$proc_root"
 }
 
-log_permanent_all() {
+single_pick() {
     _
     local action="$1"
+    { [ "$action" == "pick" ] || [ "$action" == "p" ] ||
+        { [ -n "${ACTION_OF_SESSION:+x}" ] && {
+            [ "$ACTION_OF_SESSION" == "pick" ] || [ "$ACTION_OF_SESSION" == "p" ]; }; }; }
+}
+
+# log_permanent_all
+log_permanent_all() {
+    _
+    local log_output="$1"
+    local action="$2"
     // debug '$action' "$action"
-    shift 1
+    shift 2
     # Second parameter is index
-    ! { [ "$action" == "pick" ] || [ "$action" == "p" ] ||
-    [ "$action_of_session" == "pick" ] || [ "$action_of_session" == "p" ]; } || set -- "$1"
+    ! single_pick "$action" || set -- "$1"
     [ "$#" -ge "1" ] || return 0    # // die "package based log not available"
     // debug '$log_dir' "$log_dir"
-    local cache_dir_user="$(stat -c '%U' "$cache_dir")"
-    local as_cache_user="$(// delegate -- as_user "$cache_dir_user")"
-    equ "$cache_dir_user" "$(whoami)" || {
+    local cache_user="$(stat -c '%U' "$cache_dir")"
+    # local as_cache_user="$(delegate -- as_user "$cache_user")"
+    equ "$cache_user" "$(whoami)" || {
         // log '$(whoami)' "$(whoami)"
         // log '$LOGNAME' "$LOGNAME"
-        // log '$cache_dir_user' "$cache_dir_user"
-        // log '$as_cache_user' "$as_cache_user"
+        // log '$cache_user' "$cache_user"
+        # // log '$as_cache_user' "$as_cache_user"
     }
     # // log '$log_output' "$log_output"
     # [ ! -f "$log_output" ] ||
@@ -5378,34 +5659,43 @@ log_permanent_all() {
         local log_dir_package="$cache_dir/logs/$pkg_name"
 
         [ -d "$log_dir_package" ] ||
-        $as_cache_user mkdir -p "$log_dir_package"
+        as "$cache_user" mkdir -p "$log_dir_package"
 
         local log_permanent="$log_dir_package/build.log"
-        $as_cache_user touch "$log_permanent"
+
+        # as "$cache_user" touch "$log_permanent"
         [ -f "$log_output" ] || continue
+
         // debug '$log_dir_package' "$log_dir_package"
-        local find_tip="find log at"
+        # local find_tip="find log at"
+        // bog "$log_output" "$find_tip" "$log_permanent"
 
-        [ -f "$log_output" ] || // die '$log_output' "\"$log_output\" should exist but not"
-        local tail_deep="$(// delegate -- valid_tail "$log_output")"
-        [ -z "${tail_deep:+x}" ] ||
-            IFS=$' ' read -r _ tip_check _ _ address < <(tail -n "$tail_deep" "$log_output") \
-                > /dev/null || // die "tail -n $tail_deep \"$log_output\"" "failed"
+        # [ -f "$log_output" ] || // die '$log_output' "\"$log_output\" should exist but not"
 
-        # // log '$find_tip_check' "$find_tip_check"
-        # // log '$address' "$address"
 
-        [ "$tip_check" != "find" ] ||
-        [ "$log_permanent" != "$address" ] || continue
+        # local tail_deep="$(delegate -- valid_tail "$log_output")"
+        # [ -z "${tail_deep:+x}" ] ||
+        #     read -r last_sentence < <(tail -n "$tail_deep" "$log_output") \
+        #         > /dev/null || // die "tail -n $tail_deep \"$log_output\"" "failed"
+
+        # # sleep 2.25
+        # local tail_deep="$(delegate -- valid_tail "$log_output")"
+        # [ -z "${tail_deep:+x}" ] ||
+        #     read -r last_sentence < <(tail -n "$tail_deep" "$log_output") \
+        #         > /dev/null || // die "tail -n $tail_deep \"$log_output\"" "failed"
+
+        # // log '$last_sentence' "$last_sentence"
+
+        # ! contains "$last_sentence" "$log_permanent" || continue
+
         # // log "user of $log_permanent" "$(stat -c '%U' "$log_permanent")"
-        // log "$find_tip" "$log_permanent"
         # // log "user of $log_output" "$(stat -c '%U' "$log_output")"
         # https://man7.org/linux/man-pages/man1/flock.1.html
         # https://unix.stackexchange.com/questions/184259/how-to-use-flock-and-file-descriptors-to-lock-a-file-and-write-to-the-locked-fil
         # https://stackoverflow.com/questions/67351646/what-does-flock-u-actually-do
 
-        $as_cache_user 9>"$log_dir_package"/.lock 2>&1 |
-        $as_cache_user 9>&- flock -x "$log_dir_package/.lock" -c "$($as_cache_user cp -f "$log_output" "$log_dir_package/")" & pig_list="${pig_list:+"${pig_list} "}$!"
+        as "$cache_user" 9>"$log_dir_package"/.lock 2>&1 |
+        as "$cache_user" 9>&- flock -x "$log_dir_package/.lock" -c "$(as "$cache_user" cp -f "$log_output" "$log_dir_package/")" & pig_list="${pig_list:+"${pig_list} "}$!"
 
         # Works, too
         # https://unix.stackexchange.com/questions/388026/flock-doesnt-seem-to-be-working
@@ -5452,14 +5742,21 @@ subshell_all() {
         // bog "$log_output" '$index' "$index"
         // bog "$log_output" '$0' "$0"
         // bog "$log_output" '$action' "$action"
-        // bog "$log_output" '$pkg_name' "$pkg_name"
         // bog "$log_output" '$repo_url' "$repo_url"
+        // bog "$log_output" '$pkg_name' "$pkg_name"
+        [ -n "${REPO_DIR:+x}" ] ||
+        if is_repo "$repo_url"; then
+            REPO_DIR="${repo_url%/*}"
+        else
+            REPO_DIR=""
+        fi
 
             # HOME="$HOME" \
             # LOGNAME="$(whoami)" \
             # XDG_CACHE_HOME="$XDG_CACHE_HOME" \
             # KISS_TMPDIR="$KISS_TMPDIR" \
-        $(// delegate -- as_user "$kiss_root_user") \
+
+        $(delegate -- as_user "$kiss_root_user") \
             env \
             RUSTFLAGS="--remap-path-prefix=${PWD=.} ${RUSTFLAGS}" \
             KISS_XHOST_ARCH="$KISS_XHOST_ARCH" \
@@ -5473,13 +5770,15 @@ subshell_all() {
             KISS_SRC_ROOT="$KISS_SRC_ROOT" \
             KISS_COMPRESS="$KISS_COMPRESS" \
             KISS_PATH="$KISS_PATH" \
-            KISS_FORCE="$KISS_FORCE" \
+            KISS_FORCE="${KISS_FORCE:-""}" \
             KISS_ROOT="$KISS_ROOT" \
-            KISS_CHOICE="$KISS_CHOICE" \
-            KISS_COLOR="$KISS_COLOR" \
+            KISS_CHOICE="${KISS_CHOICE:-""}" \
+            KISS_COLOR="${KISS_COLOR:-""}" \
             REPO_MAIN="$REPO_MAIN" \
             KISS_PID="$KISS_PID" \
             _KISS_LVL="$_KISS_LVL" \
+            ACTION_OF_SESSION="${ACTION_OF_SESSION:-"$action"}" \
+            SHELL_OPTIONS="e$(printf '%s' "$-")" \
             REPO_DIR="$REPO_DIR" \
             SRC_DIR="$src_dir" \
             LOG_DIR="$log_dir" \
@@ -5491,10 +5790,14 @@ subshell_all() {
             // log '$action' "$action"
             // log '$repo_url' "$repo_url"
             // log "$repo_url" "install failed"
-            // log_permanent_all "$action" "$repo_url"
+            log_output="/tmp/$kiss_root_user/logs/build.log"
+            // log_permanent_all "$log_output" "$action" "$repo_url"
 
-            kill 0
+            kill 0 ||
+            // children_kill "$KISS_PID"
         }
+        log_output="/tmp/$kiss_root_user/logs/build.log"
+        // log_permanent_all "$log_output" "$action" "$repo_url"
         : $((index += 1))
     done
     # } | tee -a "$log_output"
@@ -5510,7 +5813,10 @@ args() {
     // hint '$action' "$action"
 
     shift "$(($# != 0))"
-
+    # pkg_order() needs the following variables to be declared here
+    local deps=
+    local makedeps=
+    local explicit=
     # Ensure that arguments do not contain invalid characters. Wildcards can
     # not be used here as they would conflict with kiss extensions.
     case $action in
@@ -5527,7 +5833,8 @@ args() {
                     ;;
 
                 [!i]-*\!*|[!i]-*\**|[!i]-*\[*|[!i]-*\ *|\
-                [!i]-*\]*|[!i]-*/*|[!i]-*"$newline"*)
+                [!i]-*\]*|[!i]-*"$newline"*)
+                # [!i]-*\]*|[!i]-*/*|[!i]-*"$newline"*)
                     // die "Might be wrong usage of argument '!*[ ]/\\n' ('$_arg')." "Use a package name, please."
                     ;;
             esac done
@@ -5550,7 +5857,7 @@ args() {
             # esac
 
             # Order the argument list based on dependence.
-            IFS=$'\x03' read -r order redro < <(// delegate -- pkg_order "$@") \
+            IFS=$'\x03' read -r order redro < <(delegate -- pkg_order "$@") \
                 > /dev/null || // die 'pkg_order' "failed"
             for repo_url in $order; do
                 // pkg_dirs "$action" "$repo_url"
@@ -5569,14 +5876,15 @@ args() {
     #
     # Intended behavior.
     # shellcheck disable=2030,2031
-
-    // log '$KISS_FORCE' "$KISS_FORCE"
+    [ -z "${KISS_FORCE:+x}" ] ||
+        // log '$KISS_FORCE' "$KISS_FORCE"
     case $action in a|alternatives|i|install|r|remove)
         [ -n "${kiss_root_user:+x}" ] ||
         IFS=$'\x03' read -r  kiss_root_user _ \
-            < <(// delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
+            < <(delegate -- am_owner "$KISS_ROOT/") > /dev/null || // die 'am_owner' "failed"
 
         null "$action" || equ "$(whoami)" "$kiss_root_user" || {
+            // hint '$action' "$action"
             // subshell_all "$action" "$@"
             return
         }
@@ -5593,7 +5901,7 @@ args() {
     # :
     # // log '$KISS_DEBUG' "$KISS_DEBUG"
     # }
-    [ -z ${KISS_DEBUG+x} ] || // log "$KISS_DEBUG" "$LINENO"
+    [ -z ${KISS_DEBUG+x} ] || // log "$KISS_DEBUG" "$KISS_DEBUG"
 
     # Actions can be abbreviated to their first letter. This saves keystrokes
     # once you memorize the commands.
@@ -5605,11 +5913,11 @@ args() {
         H|help-ext)     // pkg_help_ext "$@" ;;
         i|install)      for repo_url do // pkg_install "$repo_url"; done ;;
         l|list)         // list_version "$@" ;;
-        p|pick)         // pick_up "$1" "$2" ;;
+        p|pick)         // pick_up "${1:-""}" "${2:-""}" ;;
         r|remove)       for pkg_name in $redro; do // pkg_remove "$pkg_name"; done ;;
         s|search)
             for repo_url; do
-                for item in $(// delegate -- pkg_find "$repo_url" all -d); do
+                for item in $(delegate -- pkg_find "$repo_url" all -d); do
                     // log "$repo_url" "$item"
                 done; done ;;
         u|update)       // pkg_update ;;
@@ -5638,9 +5946,9 @@ args() {
             # which call the package manager do not increment the value
             # further than the parent instance.
             // debug '$#' "$#"
-            // debug '$2-$#' "$2-$#"
+            [ -z "${2:+x}" ] || // debug '$2-$#' "$2-$#"
 
-            local kiss_command="$(// delegate -- pkg_find "kiss-$action*" "" -x "$PATH")"
+            local kiss_command="$(delegate -- pkg_find "kiss-$action*" "" -x "$PATH")"
             // hint '$kiss_command' "$kiss_command"
             ok "$kiss_command" || // die '$kiss_command' "$kiss_command"
 
@@ -5688,21 +5996,23 @@ cross_flags() {
     export KISS_XBUILD_TRIPLE="$(clang -print-target-triple | sed 's/-unknown//')"
     export KISS_XHOST_TRIPLE="${KISS_XHOST_TRIPLE:-$(// determine_arch "$KISS_ROOT/usr/bin/bzip2")}"
 
-    set -f
-    IFS_ORIGIN=$IFS
-    IFS=-
+    # set -f
+    IFS_ORIGIN="$IFS"
+    IFS=$'-'
 
-    set -- "$KISS_XBUILD_TRIPLE"
+    set +f -- $KISS_XBUILD_TRIPLE
+    set -f -- $KISS_XBUILD_TRIPLE
     export KISS_XBUILD_ARCH="$1"
     export KISS_XBUILD_SYS="$2"
     export KISS_XBUILD_ABI="$3"
 
-    set -- "$KISS_XHOST_TRIPLE"
+    set +f -- $KISS_XHOST_TRIPLE
+    set -f -- $KISS_XHOST_TRIPLE
     export KISS_XHOST_ARCH="$1"
     export KISS_XHOST_SYS="$2"
     export KISS_XHOST_ABI="$3"
 
-    IFS=$IFS_ORIGIN
+    IFS="$IFS_ORIGIN"
     # Default is set -f
     # set +f
 
@@ -5741,7 +6051,7 @@ cross_flags() {
 repo_setup() {
     _
     # Set variables which help with cross building
-    if [ -z "$KISS_BINREPO" ]; then
+    if [ -z "${KISS_BINREPO:+x}" ]; then
         // cross_flags
 
         # Bin repo will be "local" for normal builds, for chroot builds
@@ -5762,6 +6072,7 @@ repo_setup() {
 func_name="kiss"
 
 main() {
+    ___
 
     # Color can be disabled via the environment variable KISS_COLOR. Colors are
     # also automatically disabled if output is being used in a pipe/redirection.
@@ -5769,7 +6080,9 @@ main() {
     # [ -t 1 ] || { printf '%s\n' "/dev/stdout does not work"; kill 0; }
     # [ -t 2 ] || { printf '%s\n' "/dev/stderr does not work"; kill 0; }
     # equ "$KISS_COLOR" 0 || [ ! -t 2 ] || {
-    equ "$KISS_COLOR" 0 || {
+
+    [ -n "${KISS_COLOR:+x}" ] &&
+    equ "${KISS_COLOR}" 0 || {
         if [ -z "${KISS_ROOT:+x}" ]; then
             [ -n "${KISS_C1:+x}" ] && c1="$KISS_C1" || { c1='\033[1;100m'; KISS_C1="$c1"; }
             [ -n "${KISS_C2:+x}" ] && c2="$KISS_C2" || { c2='\033[1;32m'; KISS_C2="$c2"; }
@@ -5786,16 +6099,17 @@ main() {
     # Globally disable globbing and enable exit-on-error.
 
     # https://unix.stackexchange.com/questions/151771/getting-wrong-lineno-for-a-trapped-function
-    set -efE # -eE # -ef # -exf
+    if [ -n "${SHELL_OPTIONS:+x}" ]; then
+        # printf '%s\n' "\$SHELL_OPTIONS = $SHELL_OPTIONS"
+        set "-$SHELL_OPTIONS"
+    else
+        set -eufE # -eE # -ef # -exf
+    fi
 
     # Store the original working directory to ensure that relative paths
     # passed by the user on the command-line properly resolve to locations
     # in the filesystem.
-    ppwd=$PWD
-    readonly KISS_PATH
-    readonly KISS_FORCE
-    # : "${kiss_path_repo_list_origin:="${KISS_PATH}"}"
-    # // war '$kiss_path_repo_list_origin' "$kiss_path_repo_list_origin"
+    ppwd="$PWD"
 
     # Store the date and time of script invocation to be used as the name of
     # the log files the package manager creates during builds.
@@ -5811,6 +6125,20 @@ main() {
     : "${KISS_PID:=$$}"
     : "${LOGNAME:?POSIX requires LOGNAME be set}"
 
+    # Won't work
+    # : "${LFS:="$' \t\n'"}"
+    # IFS_ORIGIN="$(printf '%b' "${LFS:-"$' \t\n'"}")"
+
+    : "${IFS=" $(printf '%s' "t" | tr t \\t)
+"}"
+    # Works
+    # [ -n "${IFS:+x}" ] || IFS=$' \t\n'
+
+    readonly KISS_PATH
+    readonly KISS_STRIP
+    readonly KISS_CHOICE
+    # readonly KISS_FORCE
+    # readonly KISS_DEBUG
 
     # Figure out which 'sudo' command to use based on the user's choice or what
     # is available on the system.
@@ -5829,13 +6157,11 @@ main() {
     )"} || cmd_elf=/usr/bin/ldd
 
     # Only after thie line, logs might work
-    log_address
-
+    // log_address
+    // debug "$log_output" \'$@\' "$(esceval "$@")";
     // debug '$KISS_C1' "$KISS_C1"
     // debug '$KISS_C2' "$KISS_C2"
     // debug '$KISS_C3' "$KISS_C3"
-
-    _
 
     # Figure out which sha256 utility is available.
     cmd_sha=${KISS_CHK:-"$(
@@ -5855,8 +6181,7 @@ main() {
         command -v /usr/bin/wget2
     )"} || // die 'download utility' "not found (aria2c, axel, curl, wget, wget2)"
 
-
-    init_dirs "$ppwd"
+    // init_dirs "$ppwd"
     // log '$log_dir' "$log_dir"
     // log '$KISS_ROOT' "$KISS_ROOT"
 
@@ -5872,7 +6197,7 @@ main() {
 
     trap_off
 
-    [ -n "${log_permanent_all_done:+x}" ] || // log_permanent_all "$@"
+    [ -n "${log_permanent_all_done:+x}" ] || // log_permanent_all "$log_output" "$@"
 
     // pipe_read_kill "$pid_log" &
     pig_list="${pig_list:+"${pig_list} "}$!"
@@ -5880,7 +6205,10 @@ main() {
     pig_list="${pig_list:+"${pig_list} "}$!"
     local item
     # for item in $pig_list; do printf "%s %s\n" '$item' "$item"; done;
-    as_own "$log_dir" rm -f -- "$log_output"
+
+    # This line will be terminated by children_kill and log_permanent_all will be blocked
+    # as_own "$log_dir" rm -f -- "$log_output"
+
     as_own "$log_dir" rm -f -- "$log_pipe"
     as_own "$log_dir" rm -f -- "$screen_pipe"
     [ ! -p "$log_pipe" ] || // die '$log_pipe' "$log_pipe"
@@ -5891,7 +6219,11 @@ main() {
     # [ "$(whoami)" == "$LOGNAME" ] &&
     [ "$_KISS_LVL" -ne "1" ] || {
         // clean_all "$@"
-        trap "kill 0" EXIT
+        # trap "kill 0" EXIT
+        # kill 0/$KISS_PID in this way (as root user) will reboot the system if you run kiss in tty
+        # trap 'as "root" kill $KISS_PID' EXIT
+        # subtree_kill here will kill evironments
+        trap 'kill 0 || // children_kill "$KISS_PID"' EXIT
     }
     # trap 'for item in $pig_list; do printf "%s %s\n" "In trap \$item" "$item"; kill -0 $item && kill $item; done; kill -0 $KISS_PID && kill $KISS_PID; ' EXIT
     return 0
