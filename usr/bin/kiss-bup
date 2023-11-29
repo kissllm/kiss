@@ -1,0 +1,68 @@
+#!/bin/sh
+# Download and install binary updates from remote a server
+
+_arch="$(readelf -a -W /sbin/init | grep 'Machine:')"
+_endian="$(readelf -a -W /sbin/init | grep 'Data:')"
+
+case "$_arch $_endian" in
+    *AArch64*little*)   arch="aarch64-linux-musl";;
+    *AArch64*big*)      arch="aarch64_be-linux-musl";;
+    *ARM*)              arch="armv7-linux-musleabihf";;
+    *Intel*80386*)      arch="i686-linux-musl";;
+    *PowerPC64*little*) arch="powerpc64le-linux-musl";;
+    *PowerPC64*big*)    arch="powerpc64-linux-musl";;
+    *PowerPC*little*)   arch="powerpcle-linux-musl";;
+    *PowerPC*big*)      arch="powerpc-linux-musl";;
+    *X86-64*)           arch="x86_64-linux-musl";;
+    *RISC-V*)           arch="riscv64-linux-musl";;
+    *) die "Unknown architecture: $_arch / $_endian";;
+esac
+
+# Set up directories
+cac_dir="${XDG_CACHE_HOME:-${HOME:?HOME is null}/.cache}/kiss"
+bin_repo="${KISS_BINREPO:-local}"
+bin_dir="$cac_dir/bin/$bin_repo"
+bup_dir="$cac_dir/bup"
+remote_dir=$KISS_REMOTE_REPO
+repo_index_name=repo.index
+
+if [ -z "$remote_dir" ]; then
+    echo "You must set KISS_REMOTE_REPO"
+    exit 1
+fi
+
+echo "Getting hashes for from $remote_dir"
+
+# Prepare files if they don't exist
+mkdir -p $bup_dir
+mkdir -p $bin_dir
+touch $bin_dir/$repo_index_name
+
+
+# Get list of hashes from the remote server
+response="$(curl --write-out '%{http_code}' --silent --output $bup_dir/$repo_index_name $remote_dir/$repo_index_name)"
+
+# Check response code
+if [ $response != "200" ]; then
+    echo "Error: HTTP response $response returned for file $remote_dir/$repo_index_name"
+    exit 1
+fi
+
+# For each remote hash, see if it's different to the local repo
+# Download and install the package if it's different
+cd $bup_dir
+cat $repo_index_name | while read -r key val; do
+    different=`grep "$val" $bin_dir/$repo_index_name | grep "$key"`
+
+    if [ -z "$different" ]; then
+        echo "$val"
+        curl -# -o "$bup_dir/$val" "$remote_dir/$val"
+        KISS_FORCE=1 kiss i $val
+
+        # Update the repo index with the new package hash
+        sed -i "/${val%@*}@/d" $bin_dir/$repo_index_name
+        echo "$key  $val" >> $bin_dir/$repo_index_name
+        mv $val $bin_dir
+    fi
+
+done

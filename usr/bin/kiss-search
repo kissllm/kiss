@@ -1,0 +1,6 @@
+#!/bin/sh -e
+# Fuzzy search for packages in $KISS_PATH
+# https://www.reddit.com/r/kisslinux/comments/i2x7bn/who_uses_kiss_linux/
+echo "$KISS_PATH" | tr ':' " " | xargs ls | grep -v /var/db | fzf | xargs kiss s
+
+

@@ -1,0 +1,11 @@
+# !/bin/sh -e
+
+remote_url="$("$@" git remote -v 2> /dev/null | \
+			grep fetch | grep origin | awk '{print $2}')"
+
+[ ! -z "${remote_url:+x}" ] && [ -z "${remote_url##*"kiss"*}" ] || {
+	printf '%s\n' "Not the correct path"
+	exit 1
+}
+
+rsync -aqz --exclude ".backup" --exclude ".git*" --delete-excluded ./. ./.backup/

@@ -1,0 +1,7 @@
+# !/bin/sh -e
+
+# target_prefix="/home/kiss/lm/chroot-x86_64/usr"
+echo "\$PWD = $PWD"
+target_prefix="${1:?"Must give target prefix like \"/home/kiss/lm/chroot-x86_64/usr\""}"
+for item in $(\ls -1 usr/bin); do [ ! -e "$target_prefix/bin/$item" ] || doas \rm -f "$target_prefix/bin/$item"; doas ln -sf "$PWD/usr/bin/$item" "$target_prefix/bin/$item";  done
+for item in $(\ls -1 usr/include); do [ ! -e "$target_prefix/include/$item" ] || doas \rm -f "$target_prefix/include/$item"; doas ln -sf "$PWD/usr/include/$item" "$target_prefix/include/$item";  done

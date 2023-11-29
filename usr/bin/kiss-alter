@@ -1,0 +1,1137 @@
+#! /bin/sh -e
+# Alter a package (default dialed by kiss::subshell_all)
+
+[ ! -z "${IS_KISS+x}" ] && set -Eau || set -au
+
+check_pipefail="$(set -o | grep pipefail | awk "{print \$1}")"
+[ "$check_pipefail" != "pipefail" ] || set -o pipefail
+# Independent usage (using current environment variables)
+# kiss-install /var/db/kiss/lm/extra/luajit
+
+# Into the kiss environment (default design)
+# kiss (no need to import kiss-share and kiss every time it dials)
+# i luajit
+# . /usr/bin/kiss-install /var/db/kiss/lm/extra/luajit
+
+[ -n "${HEADER+x}" ] ||
+printf '%s %s\n' '$HEADER' "not defined"
+
+SCRIPT_NAME="kiss-alter" && export SCRIPT_NAME
+
+[ -z "${KISS_INNER_PIPE+x}" ] || unset KISS_INNER_PIPE
+[ -z "${mute_err+x}" ] || unset mute_err
+[ -z "${KEEP_DEPRECATED+x}" ] || unset KEEP_DEPRECATED
+: "${SESSION_PID:="$$"}" && export SESSION_PID
+: "${SESSION_PPID:="${PPID}"}" && export SESSION_PPID
+: "${KISS_PID:=$$}" && export KISS_PID
+: "${KISS_TMPDIR:="/tmp/$(whoami)/kiss"}" && export KISS_TMPDIR
+[ -d "$KISS_TMPDIR" ] || // as_own "$KISS_ROOT/" mkdir -p "$KISS_TMPDIR"
+log_dir="$KISS_TMPDIR/logs"
+[ -d "$log_dir" ] || // as_own "$KISS_ROOT/" mkdir -p "$log_dir"
+: "${USER_OUTPUT:="$KISS_TMPDIR/logs/build.log"}" && export USER_OUTPUT
+
+# interrupt_type="$(type "interrupt" > /dev/null && type "interrupt")" || :
+# is_repos_type="$(type "is_repos" > /dev/null && type "is_repos")" || :
+# {
+#   [ ! -z "${interrupt_type:+x}" ] &&
+#   [ -z "${interrupt_type##*"alias"*}" ] &&
+#   [ ! -z "${is_repos_type:+x}" ] &&
+#   [ -z "${is_repos_type##*"function"*}" ]
+#   # set | grep -q _level > /dev/null &&
+#   # [ -n "${HEADER+x}" ]
+# } || {
+
+# [ ! -z "${KISS_ALTER_AS_LIBRARY+x}" ] || {
+#   # # shellcheck source=/usr/include/kiss-share
+#   # . /usr/include/kiss-share
+#   # # . /usr/include/kiss-share > /dev/null 2>&1
+#   #
+#   # Recursively calling if dial current script in an individual process
+#   # shellcheck source=/usr/bin/kiss
+#   . /usr/bin/kiss --
+#   #
+#   # # shellcheck source=/usr/bin/kiss-impl
+#   # . /usr/bin/kiss-impl
+#
+#   [ -t 0 ] || // die 'fd 0' "does not work"
+#
+#   # -ash: //: Permission denied -- // is not defined
+#
+# }
+
+// log 'inside' "kiss-alter"
+#
+# Double included kiss-share
+# type_include "is_repos" "function" "/usr/bin/kiss"
+#
+# check_is_repos="$(type "is_repos" 2> /dev/null)" || :
+# printf '%s %s\n' '$check_is_repos' "$check_is_repos"
+# [ -n "${check_is_repos:+x}" ] &&
+# [ -z "${check_is_repos##*"function"*}" ] || {
+#   . /usr/bin/kiss
+# }
+
+# could be subshell function before local version
+# $1 repo_urn  : package repo url/uri
+# $2 depends   : depends file address
+# $3 missing   : missing package(s)
+installable() {
+	_level_2
+	local repo_urn="$1"
+	local pkg_name="${repo_urn##*/}"
+	pkg_name="${pkg_name%%@*}"
+	local depends="$2"
+	local missing=0
+	# Check if a package is removable and die if it is not.
+	# A package is removable when all of its dependencies
+	# are satisfied.
+	// log "$pkg_name" "checking if package installable"
+
+	// log '$PWD' "$PWD"
+	// log '$pkg_name' "$pkg_name"
+	// log '$depends' "$depends"
+
+	null "$missing" || // log '$missing' "$missing"
+
+	# False positive.
+	# shellcheck disable=2094
+	[ ! -f "$depends" ] ||
+	while read -r dep dep_type || ok "$dep"; do
+		// debug '$dep' "$dep"
+		// debug '$sys_db' "$sys_db"
+		case "$dep $dep_type" in
+			[!\#]?*"\ ")
+			[ ! -d "$sys_db/$dep" ] || ! is_repos "$sys_db/$dep" || continue
+
+			// war '$dep' "'$dep' not found"
+
+			// debug '$dep' "$dep"
+			// war '$dep' "$dep"
+			// debug '$dep_type' "$dep_type"
+			// war '$dep_type' "$dep_type"
+			: $((missing += 1))
+			set -- "$pkg_name" "$depends" "$missing"
+		esac
+	done < "$depends"
+	null "$missing" || // log '$missing' "$missing"
+	// debug '$missing' "$missing"
+	case ${missing:-0} in
+		[1-9]*)
+		// die "$pkg_name" "not installable, missing $missing package(s)"
+	esac
+}
+
+pkg_etc() {
+	_level_2
+	local repo_urn="$1"
+	local pkg_name="${repo_urn##*/}"
+	pkg_name="${pkg_name%%@*}"
+	shift 1
+
+	local file="$1"
+	local hash="$(// delegate -- "sh256" \
+		"$EXTRACT_ROOT/$pkg_name/$file" "$KISS_ROOT/${file#/}")"
+
+	local sum_new="${hash%%"$newline"*}"
+	local sum_sys="${hash#*"$newline"}"
+	local sum_old
+	read -r sum_old <&3 2>/dev/null ||
+	// war "$repo_urn/etcsums" "3: Bad file descriptor"
+
+	# Compare the three checksums to determine what to do.
+	case ${sum_old:-null}${sum_sys:-null}${sum_new} in
+		# old = Y, sys = X, new = Y
+		"${sum_new}${sum_sys}${sum_old}")
+			return 1
+			;;
+
+		# old = X, sys = X, new = X
+		# old = X, sys = Y, new = Y
+		# old = X, sys = X, new = Y
+		"${sum_old}${sum_old}${sum_old}"|\
+		"${sum_old:-null}${sum_sys}${sum_sys}"|\
+		"${sum_sys}${sum_old}"*)
+
+			;;
+
+		# All other cases.
+		*)
+			// war "$pkg_name" "saving $file as $file.new"
+			_file=$_file.new
+			;;
+	esac
+}
+
+file_rwx() {
+	_level_2
+	# Convert the output of 'ls' (rwxrwx---) to octal. This is simply
+	# a 1-9 loop with the second digit being the value of the field.
+	#
+	# NOTE: This drops setgid/setuid permissions and does not include
+	# them in the conversion. This is intentional.
+	local oct= o=
+
+	rwx="$(\ls -ld "$1" | awk '{print $1}')"
+
+	for c in 14 22 31 44 52 61 74 82 91; do
+		rwx="${rwx#?}"
+
+		case $rwx in
+			[rwx]*) o="$((o + ${c#?}))" ;;
+			 [st]*) o="$((o + 1))" ;;
+		esac
+
+		case $((${c%?} % 3)) in 0)
+			oct=$oct$o
+			o=0
+		esac
+	done
+	printf '\n%s' "$oct"
+}
+
+remove_files() {
+	_level_2
+	# Remove a file list from the system. This function runs during package
+	# installation and package removal. Combining the removals in these two
+	# functions allows us to stop duplicating code.
+	while read -r file; do
+		case $file in
+			/etc/?*[!/])
+				local hash="$(// delegate -- "sh256" "$KISS_ROOT/${file#/}")"
+				local sum_pkg
+				read -r sum_pkg <&3 ||
+				// war "$repo_urn/etcsums" "3: Bad file descriptor"
+
+				equ "$hash" "$sum_pkg" || {
+					// log "skipping" "$file (modified)"
+					continue
+				}
+		esac
+
+		local _file=${KISS_ROOT:+"$KISS_ROOT/"}"${file%%/}"
+
+		# Queue all directory symlinks for later removal.
+		if [ -h "$_file" ] && [ -d "$_file" ]; then
+			case $file in
+				/*/*/)
+				set -- "$@" "$_file"
+			esac
+
+		# Remove empty directories.
+		elif [ -d "$_file" ]; then
+			as_own "$KISS_ROOT/" rmdir "$_file" 2>/dev/null || :
+
+		# Remove everything else.
+		else
+			as_own "$KISS_ROOT/" rm -f "$_file"
+		fi
+	done
+
+	# Remove all broken directory symlinks.
+	for sym do
+		[ -e "$sym" ] || as_own "$KISS_ROOT/" rm -f "$sym"
+	done
+}
+
+install_files() {
+	_level_2
+	local repo_urn="$1"
+	local pkg_name="${repo_urn##*/}"
+	pkg_name="${pkg_name%%@*}"
+	is_repos "$repo_urn" ||
+		repo_urn="$(// delegate -- repo_trace "$pkg_name")"
+	shift 1
+
+	// log '$@' "$(esceval "$@")"
+
+	local flag="$1"
+	local ext_dir="$2"
+
+	set --
+	local kiss_root_user="$(// delegate owner "$KISS_ROOT/")"
+	[ "$LOGNAME" = "$kiss_root_user" ] ||
+		set -- $(// delegate as_user "$kiss_root_user")
+
+	local _file
+
+	# Copy files and create directories (preserving permissions).
+	# The 'test $1' will run with '-z' for overwrite and '-e' for verify.
+	while { read -r file && _file=$KISS_ROOT$file; } do case $file in
+		*/)
+			# Skip directories if they already exist in the file system.
+			# (Think /usr/bin, /usr/lib, etc).
+			[ -d "$_file" ] || {
+				local oct="$(// delegate -- file_rwx "$ext_dir$file")"
+				"$@" \mkdir -m "$oct" -p "$_file"
+			}
+		;;
+
+		*)
+			# Skip directories and files which exist in verify mode.
+			# [ -d "$_file" ] || ! test "$flag" "$_file" || continue
+			{ [ ! -d "$_file" ] && ! test "$flag" "$_file"; } || continue
+
+			# Neovim
+			# mv to '/usr/share/locale/cs.cp1250/LC_MESSAGES/nvim.mo' failed
+			local dir="${_file%/*}"
+
+			[ -d "$dir" ] || {
+				local oct="$(// delegate -- file_rwx "$ext_dir${file%/*}")"
+				"$@" \mkdir -m "$oct" -p "$dir"
+			}
+
+			case $file in /etc/*[!/])
+				# Handle /etc/ files in a special way (via a 3-way checksum) to
+				# determine how these files should be installed. Do we overwrite
+				# the existing file? Do we install it as $file.new to avoid
+				# deleting user configuration? etc.
+				#
+				# This is more or less similar to Arch Linux's Pacman with the
+				# user manually handling the .new files when and if they appear.
+				[ ! -f "$repo_urn/etcsums" ] ||
+				// pkg_etc "$repo_urn" "$file" || continue
+			esac
+
+			if [ -h "$_file" ]; then
+				# Copy the file to the destination directory overwriting
+				# any existing file.
+				"$@" \cp -fP "$ext_dir$file" "${_file%/*}/." ||
+				// die "cp $ext_dir$file to" "'${_file%/*}/.' failed"
+
+			else
+
+				# Construct a temporary filename which is a) unique and
+				# b) identifiable as related to the package manager.
+				local __tmp="${_file%/*}"/__kiss-tmp-"$pkg_name"-"${file##*/}"-"$KISS_PID"
+
+				# Copy the file to the destination directory with the
+				# temporary name created above.
+				"$@" \cp -fP "$ext_dir$file" "$__tmp" &&
+
+				# Atomically move the temporary file to its final
+				# destination. The running processes will either get
+				# the old file or the new one.
+				"$@" \mv -f "$__tmp" "$_file" ||
+				# Extremely slow
+				# "$@" rsync -aqX --remove-source-files "$__tmp" "$_file" ||
+				// die "mv $__tmp to" "'$_file' failed"
+			fi
+	esac || return 1; done
+}
+
+# Return recommended repo source
+# How to use
+# dispose "$pkg_name" "$base_main_dir" "${repo_in_main%/*}" "${reference%/*}" "$index_global"
+dispose() (
+	_level_2
+	local pkg_name="$1"
+	pkg_name="${pkg_name%%@*}"
+	local base_main_dir="$2"
+	# Operating object
+	local repo_in_main_dir="$3"
+	# target_source of repo_target -- could be sys_db, main repos, underconstruction, or EXTRACT_ROOT
+	local reference_dir="$4"
+	local index_global="$5"
+	local repo_result=
+	# repo_in_main="$(standardize "$repo_in_main")"
+	local repo_target="$KISS_ROOT/$sys_db/$pkg_name"
+
+	is_repos "$reference_dir/$pkg_name" ||
+	// die '$reference_dir/$pkg_name' \
+	"'$reference_dir/$pkg_name' is not a valid repo"
+
+	is_repos "$repo_target" ||
+	// die '$repo_target' "'$repo_target' is not a valid repo"
+
+	// is_mirror "$repo_target" "$reference_dir/$pkg_name" ||
+	// die '$reference_dir/$pkg_name' \
+	"'$reference_dir/$pkg_name' is not a valid repo"
+
+	! equ "$reference_dir" "$repo_in_main_dir" ||
+	// die '$repo_in_main_dir' \
+	"'$repo_in_main_dir' is pathologically duplicated"
+
+	# Merged into main process of the function
+	# is_repos "$repo_in_main_dir/$pkg_name" || {
+	#     # Replace the corrupted one
+	#     // war "$repo_in_main_dir/$pkg_name" \
+	#         "was discarded due to lack of integrity and being removed by now"
+	#     if  # is_repos "$reference_dir/$pkg_name" &&
+	#         # A redundant but needs attention
+	#         # ! equ "$reference_dir" "$repo_in_main_dir" &&
+	#         is_in_main "$reference_dir/$pkg_name"; then
+	#         # Name/pkg_name/key conflicted
+	#         // prompt "content"  "Delete the packages? '$repo_in_main_dir/$pkg_name'"
+	#         \rm -rf "$repo_in_main_dir/$pkg_name"
+	#         repo_result="$reference_dir/$pkg_name"
+	#     else # is_repos "$reference_dir/$pkg_name" &&
+	#         # ! is_in_main "$reference_dir/$pkg_name"; then
+	#         rsync -aqzL "$reference_dir/$pkg_name/." --exclude="keys" --exclude="manifest" \
+	#             --delete --delete-excluded "$repo_in_main_dir/$pkg_name/"
+	#         sync
+	#         repo_result="$repo_in_main_dir/$pkg_name"
+	#     fi
+	#     printf '%s' "$repo_result"
+	#     return 0
+	# }
+
+
+	# [ -z "${KISS_FORCE+x}" ] &&
+	# // is_mirror "$repo_target" "$repo_in_main_dir/$pkg_name" || {
+	archive() {
+		local repo_in_main="$1"
+		local dir ver rel  alias url reference_type
+		/ "IFS=$(printf '%b' "\x03") read -r \
+			dir ver rel alias url reference_type \
+			<< $(// here_doc -- pkg_version "$repo_in_main_dir/$pkg_name")"
+			> /dev/null || // die 'pkg_version' "failed"
+
+		# Newcomers make their own interal new release numbers
+		# # Make room for the newcomers
+		# [ ! -d "$base_main_dir/$pkg_name/$version_dir" ] || {
+		#     // is_mirror "$base_main_dir/$pkg_name/$version_dir" "$repo_in_main" ||
+		#     ! is_repos "$base_main_dir/$pkg_name/$version_dir" || {
+		#         \mv -f "$base_main_dir/$pkg_name/$version_dir" \
+		#             "$base_main_dir/$pkg_name/$new_release_dir"
+		#     }
+		# }
+
+		local item
+		local found_duplicated=
+		local ver_new="$ver" rel_new="$rel"
+		# for item in $(\ls -1 "$base_main_dir/$pkg_name"); do
+		for item in $(// as_own "$base_main_dir" \
+			find "$base_main_dir/$pkg_name" -type d \
+				-mindepth 2 -maxdepth 2); do
+			is_repos "$item" || continue
+			// is_mirror "$item" "$repo_in_main" || continue
+			found_duplicated="$item${found_duplicated:+" ${found_duplicated}"}"
+			break
+		done
+		[ -n "$found_duplicated" ] || {
+			local version_dir="$ver-$rel"
+			local new_release_dir="$ver-$rel"
+			while [ -d "$base_main_dir/$pkg_name/$new_release_dir" ]; do
+				rel_new=$((rel_new + 1))
+				new_release_dir="$ver_new-$rel_new"
+			done
+			equ "$ver" "$ver_new" && equ "$rel" "$rel_new" ||
+			printf '%s %s %s %s %s\n' \
+			"$ver_new" \
+			"$rel_new" \
+			"$alias" "$url" "$reference_type" > "$repo_in_main/version"
+			# [ -d "$base_main_dir/$pkg_name/$version_dir" ] || {
+			rsync -aqzL "$repo_in_main/." --exclude="keys" \
+				--exclude="manifest" \
+				--delete --delete-excluded \
+				"$base_main_dir/$pkg_name/$new_release_dir/$pkg_name/" ||
+				// war 'backup' "\"$repo_in_main/.\" was unsuccessful"
+			sync
+			# }
+		}
+		# The most recent repo backup
+		rsync -aqzL "$repo_in_main/." --exclude="keys" --exclude="manifest" \
+			--delete --delete-excluded "$base_main_dir/$pkg_name/" ||
+		// war 'backup' "\"$repo_in_main/.\" was unsuccessful"
+		sync
+		# This release number is an internal reference number until you bring it outside
+		# printf '\n%s\x03%s' "$ver_new" "$rel_new"
+	}
+	# }
+
+	if  # is_repos "$reference_dir/$pkg_name" &&
+		# ! equ "$reference_dir" "$repo_in_main_dir" &&
+		is_in_main "$reference_dir/$pkg_name"; then
+		# Reundances
+		// log '$repo_in_main_dir/$pkg_name' \
+			"$repo_in_main_dir/$pkg_name [$index_global]"
+		// log '$reference_dir/$pkg_name' "$reference_dir/$pkg_name"
+
+		! is_repos "$repo_in_main_dir/$pkg_name" ||
+		is_mirror "$repo_in_main_dir/$pkg_name" "$base_main_dir/$pkg_name" ||
+		archive "$repo_in_main_dir/$pkg_name"
+
+		#         // prompt "content" "Delete the packages? '$repo_in_main_dir/$pkg_name' \
+		# ${newline}It has been backuped in '$REPO_MAIN/base'" &&
+		local content="$(
+		// delegate -- prompt "Delete the duplicated packages? \
+			${newline}'$repo_in_main_dir/$pkg_name' \
+			${newline}It has been backuped in '$REPO_MAIN/base' [*|n|ctrl+c]"
+		)"
+		# { [ ! -z "${content:+x}" ] &&
+		#   expr "$content" : '[n|N]\+' > /dev/null; } ||
+		expr "$content" : '[n|N]\+' > /dev/null ||
+			\rm -rf "$repo_in_main_dir/$pkg_name"
+		repo_result="$reference_dir/$pkg_name"
+	# elif ! is_in_main "$reference_dir/$pkg_name" &&
+	#     ! is_mirror "$repo_in_main_dir/$pkg_name" "$reference_dir/$pkg_name"; then
+	else
+		is_mirror "$repo_in_main_dir/$pkg_name" "$reference_dir/$pkg_name" || {
+
+			! is_repos "$repo_in_main_dir/$pkg_name" ||
+			is_mirror "$repo_in_main_dir/$pkg_name" "$base_main_dir/$pkg_name" ||
+			archive "$repo_in_main_dir/$pkg_name"
+
+			rsync -aqzL "$reference_dir/$pkg_name/." \
+				--exclude="keys" --exclude="manifest" \
+				--delete --delete-excluded "$repo_in_main_dir/$pkg_name/" ||
+			// die 'trasfer' "\"$reference_dir/$pkg_name/.\" was unsuccessful"
+			sync
+			// log "${pkg_name} imported" "$repo_in_main_dir/$pkg_name"
+		}
+		repo_result="$repo_in_main_dir/$pkg_name"
+	fi
+
+	printf '\n%s' "$repo_result"
+)
+
+# $1 repo_urn : package path
+pkg_install() {
+	_level_2
+	local repo_urn="$1"
+	local action="install"
+	// cue 'install' "$repo_urn"
+
+	# Install a built package tarball.
+	#
+	# Package installation works similarly to the method used by Slackware in
+	# some of their tooling. It's not the obvious solution to the problem,
+	# however it is the best solution at this given time.
+	#
+	# When an installation is an update to an existing package, instead of
+	# removing the old version first we do something different.
+	#
+	# The new version is installed overwriting any files which it has in
+	# common with the previously installed version of the package.
+	#
+	# A "diff" is then generated between the old and new versions and contains
+	# any files existing in the old version but not the new version.
+	#
+	# The package manager then goes and removes these files which leaves us
+	# with the new package version in the file system and all traces of the
+	# old version gone.
+	#
+	# For good measure the package manager will then install the new package
+	# an additional time. This is to ensure that the above diff didn't contain
+	# anything incorrect.
+	#
+	# This is the better method as it is "seamless". An update to busybox won't
+	# create a window in which there is no access to all of its utilities.
+	local repo_ver repo_rel repo_dir
+	local tar_file
+	local pkg_name
+	local target_source=
+	local format=
+	local reference_type=
+	# Install can also take the full path to a tarball. We don't need to check
+	# the repository if this is the case.
+	case $repo_urn in
+		*.tar.*)
+			// log 'tar $repo_urn' "$repo_urn"
+			tar_file="$repo_urn"
+			# format="$(// delegate -- pkg_format "$repo_urn")"
+			/ "IFS=$(printf '%b' "\x03") read -r \
+				format reference_type \
+				<< $(// here_doc -- pkg_format "$repo_urn")"
+			> /dev/null || { // die 'pkg_format' "failed"; exit 1; }
+			// log '$format' "$format"
+
+			[ -f "$repo_urn" ] || // die '$repo_urn' "File '${repo_urn:+"${repo_urn} "}'does not exist"
+
+			pkg_name="${repo_urn##*/}"
+			pkg_name="${pkg_name%@*}"
+			// log '$pkg_name' "$pkg_name"
+			;;
+
+		*)
+			// log '$repo_urn' "$repo_urn"
+
+			repo_urn="$(standardize "$repo_urn")"
+			pkg_name="${repo_urn##*/}"
+			is_repos "$repo_urn" ||
+				repo_urn="$(// delegate -- repo_trace "$pkg_name")"
+
+			# Have to permit $sys_db
+			# [ -z "${repo_urn##*"${sys_db}"*}" ] ||
+			! is_repos "$repo_urn" || target_source="$repo_urn"
+
+			// tar_file="$(// delegate -- pkg_cache "$repo_urn")"
+			ok "$tar_file" || {  # // die "$pkg_name" "not yet built"
+				{ action=c; ! // pkg_checksum  "$repo_urn" 2>&1; } ||
+				{ action=b; ! // build_all "$deps" "$makedeps" "$repo_urn" 2>&1; } ||
+				// tar_file="$(// delegate -- pkg_cache "$repo_urn")"
+				ok "$tar_file" || // die "$pkg_name" "build failed"
+			}
+			;;
+	esac
+
+	repo_target="$KISS_ROOT/$db/$pkg_name"
+
+	# Will do pkg_clear
+	# // pkg_dirs "$action" "$pkg_name"
+
+	// log '$pkg_name' "$pkg_name"
+	// log '$repo_target' "$repo_target"
+	// log '$EXTRACT_ROOT/$pkg_name' "$EXTRACT_ROOT/$pkg_name"
+
+	empty "$EXTRACT_ROOT/$pkg_name" ||
+	# find "$EXTRACT_ROOT/$pkg_name" -mindepth 1 -delete
+		# for item in $(find "$EXTRACT_ROOT/$pkg_name" -type d -mindepth 1 -maxdepth 1); do
+		for item in $(// as_own "$EXTRACT_ROOT" \
+			find "$EXTRACT_ROOT/$pkg_name" -mindepth 1 -maxdepth 1); do
+			# choices folder items won't accept removing by normal users even it's is owned by the normal user
+			# [ ! -e "$item" ] || [ ! -h "$item" ] ||
+			// as "root" \rm -rf "$item"
+		done
+	empty "$TEMP_ROOT/$pkg_name" ||
+	// as_own "$TEMP_ROOT" find "$TEMP_ROOT/$pkg_name" -mindepth 1 -delete
+
+	// mkcd "$EXTRACT_ROOT/$pkg_name"
+
+	# The tarball is extracted to a temporary directory where its contents are
+	# then "installed" to the filesystem. Running this step as soon as possible
+	# allows us to also check the validity of the tarball and bail out early
+	# if needed.
+
+	ok "$tar_file" ||
+	// die '$tar_file' "${tar_file:+"${tar_file} "}not found [local]"
+
+	// log '$tar_file' "$tar_file [local]"
+
+	// decompress "$tar_file" | tar xf -
+
+	local repo_dir= repo_ver= repo_rel= alias= url= reference_type=
+	/ "IFS=$(printf '%b' "\x03") read -r \
+		repo_dir repo_ver repo_rel \
+		alias url reference_type \
+		<< $(// here_doc -- pkg_version "$pkg_name" "" "" \
+		"$EXTRACT_ROOT/$pkg_name/$db")" \
+		> /dev/null || // die 'pkg_version' "failed"
+
+	# Naively assume that the existence of a manifest file is all that
+	# determines a valid KISS package from an invalid one. This should be a
+	# fine assumption to make in 99.99% of cases.
+	local tar_manifest="$EXTRACT_ROOT/$pkg_name/$db/$pkg_name/manifest"
+	// log '$tar_manifest' "$tar_manifest"
+	# [ -d "$EXTRACT_ROOT/$pkg_name/$db/$pkg_name" ] ||
+	#     // as_own "$EXTRACT_ROOT/$pkg_name" mkdir -p "$EXTRACT_ROOT/$pkg_name/$db/$pkg_name"
+	[ -f "$tar_manifest" ] || # // as_own "$EXTRACT_ROOT/$pkg_name" touch "$tar_manifest"
+		// die '$tar_manifest' "Not a valid KISS package. \"$tar_manifest\" does not exist"
+
+	# Intended behavior.
+	# shellcheck disable=2030,2031
+	[ -n "${KISS_FORCE+x}" ] || {
+		// manifest_validate "$pkg_name"
+		// installable "$pkg_name" "$EXTRACT_ROOT/$pkg_name/$db/$pkg_name/depends"
+	}
+
+	[ -z "${repo_urn:+x}" ] ||
+	[ -n "${repo_urn##*".tar."*}" ] || {
+
+		if [ -d "$repo_dir" ]; then
+			repo_urn="$repo_dir/$pkg_name"
+		else
+			repo_urn="$PKG_ROOT/$EXTRACT_ROOT/$db/$pkg_name"
+		fi
+		// log '$repo_urn' "$repo_urn"
+		# [ -z "${repo_urn##*"${sys_db}"*}" ] ||
+		! is_repos "$repo_urn" || target_source="$repo_urn"
+	}
+
+	[ ! -z "$format" ] || {
+		# format="$(// delegate -- pkg_format "$repo_urn")"
+		/ "IFS=$(printf '%b' "\x03") read -r \
+			format reference_type \
+			<< $(// here_doc -- pkg_format "$repo_urn")"
+		> /dev/null || { // die 'pkg_format' "failed"; exit 1; }
+	}
+	// log '$format' "$format"
+
+	[ -d "$target_source" ] || // die '$target_source' "dir \"$target_source\" does not exist"
+
+	// log '$target_source' "$target_source"
+	// log '$KISS_ROOT' "$KISS_ROOT"
+	// log '$sys_db' "$sys_db"
+	// log '$EXTRACT_ROOT' "$EXTRACT_ROOT"
+	# $HOME/.cache/kiss/proc/$pkg_name/extract
+	// log '$PKG_ROOT' "$PKG_ROOT"
+	# $HOME/.cache/kiss/proc/$pkg_name/pkg
+	// log '$db' "$db"
+	// log '$pkg_name' "$pkg_name"
+	// log '$PKG_ROOT/$pkg_name/$db/$pkg_name' "$PKG_ROOT/$pkg_name/$db/$pkg_name"
+	// log '$EXTRACT_ROOT/$pkg_name/$db/$pkg_name' "$EXTRACT_ROOT/$pkg_name/$db/$pkg_name"
+
+	[ -d "$PKG_ROOT/$pkg_name/$db/$pkg_name" ] || // die "$PKG_ROOT/$pkg_name/$db/$pkg_name" "does not exist"
+
+	local repo_dir= repo_ver= repo_rel= repo_alias= repo_url= reference_type=
+	/ "IFS=$(printf '%b' "\x03") read -r \
+		repo_dir repo_ver repo_rel \
+		repo_alias repo_url reference_type \
+		<< $(// here_doc -- pkg_version "${target_source}")" \
+		> /dev/null || // die 'pkg_version' "failed"
+
+	# https://www.shellcheck.net/wiki/SC2316
+	// log '$repo_ver' "$repo_ver"
+	// log '$repo_rel' "$repo_rel"
+	// log '$repo_dir' "$repo_dir"
+
+	// log '$PWD' "$PWD"
+
+	# arg1: pre-install
+	# arg2: package name
+	# arg3: path to extracted package
+	// run_hook     pre-install "$pkg_name" "$EXTRACT_ROOT/$pkg_name"
+	// run_hook_pkg pre-install "$pkg_name" "$repo_ver" "$repo_rel" "$repo_dir"
+
+	// conflicts "$pkg_name"
+
+	// log "$pkg_name" "installing package (${tar_file##*/})"
+
+
+	local manifest_diff="$(// delegate -- slot_aquire "$pkg_name" "manifest-diff")"
+	// log '$manifest_diff' "$manifest_diff"
+
+	# If the package is already installed (and this is an upgrade) make a
+	# backup of the manifest and etcsums files.
+	[ ! -f  "$repo_target/manifest" ] || {
+		local manifest="$(
+			// delegate -- slot_push "$pkg_name" \
+				"$repo_target/manifest")"
+		// log '$manifest' "$manifest"
+
+		# Generate a list of files which exist in the currently installed manifest
+		# but not in the newer (to be installed) manifest.
+		# grep -vFxf "$tar_manifest" "$manifest" > "$manifest_diff" 2>/dev/null ||
+		grep -vFxf "$tar_manifest" "$manifest" \
+			> "$manifest_diff" 2>/dev/null || :
+		# // war 'grep' "'$manifest_diff' exception occurred"
+	}
+	# Reverse the manifest file so that we start shallow and go deeper as we
+	# iterate over each item. This is needed so that directories are created
+	# going down the tree.
+	local manifest_reverse="$(
+	// delegate -- slot_aquire "$pkg_name" "manifest-reverse")"
+	sort "$tar_manifest" > "$manifest_reverse"
+
+	# Block being able to abort the script with Ctrl+C during installation.
+	# Removes all risk of the user aborting a package installation leaving
+	# an incomplete package installed.
+	// trap_off    # trap '' INT
+
+	local overwrite="$repo_urn -z $EXTRACT_ROOT/$pkg_name < $manifest_reverse"
+	local remove="< $manifest_diff"
+	local verify="$repo_urn -e $EXTRACT_ROOT/$pkg_name < $manifest_reverse"
+	[ ! -f "$repo_target/etcsums" ] || {
+		local etcsums_clone="$(
+			// delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
+		// log '$etcsums_clone'  "$etcsums_clone"
+		exec 3< "$etcsums_clone"
+		overwrite="$overwrite 3< $etcsums_clone"
+		remove="$remove 3< $etcsums_clone"
+		verify="$verify 3< $etcsums_clone"
+	}
+	// log '$overwrite' "$overwrite"
+	// log '$remove' "$remove"
+	// log '$verify' "$verify"
+	# Install the package's files by iterating over its manifest.
+	{
+		/ // install_files $overwrite &&
+
+		# This is the aforementioned step removing any files from the old
+		# version of the package if the installation is an update. Each file
+		# type has to be specially handled to ensure no system breakage occurs.
+		/ // remove_files $remove &&
+
+		# Install the package's files a second time to fix any mess caused by
+		# the above removal of the previous version of the package.
+		/ // install_files $verify;
+
+	} || {
+		// clean_all "i" "$pkg_name"    # clean_all
+		// war "$pkg_name" "Failed to install package"
+		// die "$pkg_name" "The file system is currently in a dirty state and requires manual maintenance"
+	}
+	# Reset 'trap' to its original value. Installation is done so we no longer
+	# need to block 'Ctrl+C'.
+	// trap_on "install" "$pkg_name" # trap clean_all EXIT INT
+
+	# arg1: post-install
+	# arg2: package name
+	# arg3: path to installed package database
+	// run_hook_pkg post-install "$pkg_name" "$repo_ver" "$repo_rel" "$repo_dir"
+	// run_hook     post-install "$pkg_name" "$EXTRACT_ROOT/$pkg_name"
+
+
+	equ "$repo_target" "$target_source" || {
+		// is_mirror "$repo_target" "$target_source" ||
+		# Passing array to --exclude won't work on POSIX shell
+		// as_own "$KISS_ROOT/" \
+			rsync -aqzL "$target_source/." \
+			--exclude="keys" \
+			--exclude="manifest" \
+			--exclude="$repo_ver-$repo_rel" \
+			--delete --delete-excluded "$repo_target/" && sync
+
+		// is_mirror "$repo_target" "$target_source" ||
+			// die '$repo_target' "${repo_target:+"${repo_target} "}is neither a mirror nor itself"
+	}
+
+	[ -n "${REPO_ROOT:+x}" ] || // die '$REPO_ROOT' "$REPO_ROOT"
+	[ -n "${REPO_MAIN:+x}" ] || // die '$REPO_MAIN' "$REPO_MAIN"
+	[ -d "$REPO_MAIN" ] || // die '$REPO_MAIN' "'$REPO_MAIN' directory does not exist"
+
+	# package repo might be in sys_db / main repo / others
+	# We want to create the relation between sys_db and main repo
+	# Serial key occupied : value identical : key in main repo
+	#   1      0            check checksum?            0          # Key global conflicts free. Double keys might have the same repo
+	#   1      0            check checksum?            0          # Copy $repo_target to main repo
+	#   2      1                   1                   1          # Keep it: target_source="$repo"
+	#   3      1                   1                   0          # Copy $repo_target to main repo
+	#   4      1                   0                   0          # To invent a wheel? Auto version and link to it? archive. "choices"?
+
+	# Move to pick_up? No, because you don't know if it will be built
+	# [ -n "${target_source##*${sys_db}*}" ] || {
+
+	# target_source is in sys_db
+	local index_global=-1
+	local condidates=
+
+	local base_main_dir="$REPO_MAIN/base"
+	local repo_base="$base_main_dir/$pkg_name"
+	[ -d "$repo_base" ] || // as_own "$KISS_ROOT/" \mkdir -p "$repo_base"
+
+	# Will include submodules
+	# Search outside sys_db
+	# for repo_in_main in $(find "$REPO_MAIN" \( -type d -o -type l \) \( \
+	#             -path "*/modules" \
+	#             -o -path "*/underconstruction" \
+	#             -o -path "*/.git" \
+	#             \) -prune -o -name "${pkg_name}" -print); do
+	#             # -o -path "*/base" \
+
+	# In system evironment main repo list
+	# Looks like:
+	# $REPO_MAIN/system/crust
+	is_in_main "$target_source" || {
+		local repo_in_main
+		# local main_list="$(// delegate -- repo_trace "$pkg_name" "pure" "-d" "$KISS_PATH")"
+		# REPO_DIR does not make sence at this moment
+		# null "$REPO_DIR" || main_list="${REPO_DIR}/$pkg_name $main_list"
+		for repo_in_main in $(
+			// delegate -- repo_trace "$pkg_name" "pure" "-d" "$KISS_PATH"); do
+			index_global="$((index_global + 1))"
+			[ -n "${repo_in_main:+x}" ] || continue
+			[ "${repo_in_main##*/}" == "$pkg_name" ] || continue
+			ok "${repo_in_main##*"${repo_base}"*}" ||
+			// die '$repo_in_main' "$repo_in_main [$index_global]"
+			ok "${repo_in_main##*"${sys_db}"*}" || {
+				// war '$repo_in_main' \
+				"$repo_in_main [$index_global] came from $sys_db"
+				continue
+			}
+			// log '$repo_in_main' "$repo_in_main [$index_global]"
+			// log '$target_source' "$target_source"
+
+			target_source="$(// delegate -- dispose \
+				"$pkg_name" \
+				"$base_main_dir" \
+				"${repo_in_main%/*}" \
+				"${target_source%/*}" \
+				"$index_global")"
+
+			ok "${target_source##*"${repo_base}"*}" ||
+				// die '$target_source' "$target_source [$index_global]"
+
+			! // is_in_main "$target_source" &&
+			# $repo_in_main without being removed
+			[ -d "$repo_in_main" ] || continue
+			#
+			# // prompt "content" "What!!! The following code was deprecated"
+			#
+			local content="$(
+			// delegate -- prompt "What!!! The following code should be deprecated.\
+				${newline}Unless you modified repo identicals manually")"
+			# continue
+			local ver rel dir
+			# Guaranteed performance with step-by-step filtering
+			diff -bwurB "$repo_target/version" "$repo_in_main/version" > /dev/null 2>&1 || continue
+			diff -bwurB "$repo_target/build" "$repo_in_main/build" > /dev/null 2>&1 || continue
+			! // is_mirror "$repo_target" "$repo_in_main" || {
+				# First run
+				# If is_mirror == true, and target_source is not in main repo list, get it
+				local dir= ver= rel= repo_alias= repo_url= reference_type=
+				/ "IFS=$(printf '%b' "\x03") read -r dir ver rel \
+					repo_alias repo_url reference_type \
+					<< $(// here_doc -- pkg_version "$repo_in_main")" > /dev/null ||
+					// die 'pkg_version' "failed"
+				// log "${pkg_name}" "$repo_in_main [$ver-$rel] [$dir/$pkg_name]"
+				ok "${repo_in_main##*"${repo_base}"*}" ||
+				// die '$repo_in_main' "$repo_in_main [$index_global]"
+				target_source="$repo_in_main"
+				continue
+			}
+
+			# key matched/conflicts repos has different content with target_source
+			# Key conflicts and content does not match / inconsistency
+			# First run
+			target_source="$(// delegate -- dispose \
+				"$pkg_name" \
+				"$base_main_dir" \
+				"${repo_in_main%/*}" \
+				"${repo_target%/*}" \
+				"$index_global")"
+			ok "${repo_in_main##*"${repo_base}"*}" ||
+			// die '$repo_in_main' "$repo_in_main [$index_global]"
+
+			// log "${pkg_name} imported" "$repo_in_main [$ver-$rel]"
+		done
+	}
+
+	[ -d "$repo_target" ] &&
+	// is_mirror "$repo_target" "$target_source" ||
+	// die '$repo_target' "${repo_target:+"${repo_target} "}is demaged"
+
+	# }
+
+	# package repo source is in other paths or just in sys_db
+	// is_in_main "$target_source" || {
+		// log "$pkg_name imported" "$REPO_MAIN/extra/$pkg_name"
+		# Dead link
+		[ -d "$$REPO_MAIN/extra/$pkg_name" ] ||
+		// as_own "$REPO_MAIN/extra/$pkg_name" \
+			\rm -f "$REPO_MAIN/extra/$pkg_name"
+
+		// as_own "$KISS_ROOT/" \
+		rsync -aqzL "$repo_target" "$REPO_MAIN/extra/"
+		// as_own "$KISS_ROOT/" sync
+		# package repo is in main repo
+		target_source="$REPO_MAIN/extra/$pkg_name"
+	}
+
+	is_in_main "$target_source" ||
+	// die '$target_source' "${target_source:+"${target_source} "}is weird imported"
+
+	// log '$repo_target' "$repo_target"
+	// log '$target_source' "$target_source"
+
+	# # Keys design begin
+	# local repo_source_encoded="$(// delegate -- encode "$target_source" "REPO_MAIN" "$REPO_MAIN")"
+	# repo_source_encoded="$(standardize "$repo_source_encoded")"
+	# repo_dir_encoded="${repo_source_encoded%/*}"
+	# // log '$repo_dir_encoded' "$repo_dir_encoded"
+	# // log '$repo_source_encoded' "$repo_source_encoded"
+	# # Keys design end
+
+	printf '%s %s %s %s %s\n' "$repo_ver" "$repo_rel" "$repo_alias" \
+		"$repo_url" "$reference_type" |
+		// as_own "$target_source/version" tee "$target_source/version" > /dev/null
+	printf '%s %s %s %s %s\n' "$repo_ver" "$repo_rel" "$repo_alias" \
+		"$repo_url" "$reference_type" |
+		// as_own "$repo_target/version" tee "$repo_target/version" > /dev/null
+
+	# # Keys design begin
+	# [ -z "${USE_KEYS:+x}" ] || {
+	#   local index_key=0
+	#   local version_list=
+	#   local ifs="$IFS"
+	#   local IFS="$(printf '%b' "\x03")"
+	#   [ ! -s "$repo_target/keys" ] ||
+	#   while IFS=$' ' read -r ver rel repo; do
+	#       null "$ver" || null "$rel" || null "$repo" ||
+	#       { [ "$ver" = "$repo_ver" ] && [ "$rel" = "$repo_rel" ] && [ "$repo" = "$target_source" ]; } || {
+	#           local found=0
+	#           for item in $version_list; do
+	#               [ "$item" == "${ver} ${rel} ${repo}" ] || continue
+	#               found=1
+	#               break
+	#           done
+	#           equ "$found" "1" || {
+	#               length_trim "ver" "$LENGTH_VER"
+	#               length_trim "rel" "$TABSTOP"
+	#               local color_child_origin="$color_child"
+	#               IFS="$ifs"
+	#               # // log "$(printf "%-${TABSTOP}s %-${LENGTH_VER}s" "$index_key" "$ver")" \
+	#               # "$(printf "%-${TABSTOP}s %-2s %s" "$rel" "" "$repo")"
+	#               // density_out "$repo" "${target_source-}" "$index_key"
+	#               # // density_out "$repo" "$target_source" "$index_key"
+	#               IFS="$(printf '%b' "\x03")"
+	#               color_child="$color_child_origin"
+	#               version_list="$version_list${ver} ${rel} ${repo}${IFS}"
+	#           }
+	#       }
+	#       : $((index_key += 1))
+	#   done < "$repo_target/keys"
+	#   # No \n at the end
+	#   version_list="$version_list${repo_ver} ${repo_rel} ${repo_source_encoded}"
+	#   : > "$repo_target/keys"
+	#   for item in $version_list; do
+	#       printf "%s\n" "$item" >> "$repo_target/keys"
+	#   done
+	#   IFS="$ifs"
+
+	#   [ -f "$repo_target/keys" ] || // die '$repo_target/keys' "\"$repo_target/keys\" should exist but not"
+	#   local last_sentence="$(// delegate -- valid_tail "$repo_target/keys")"
+	#   [ -n "${last_sentence:+x}" ] || // die '$repo_target/keys' "keys file \"$repo_target/keys\" is invalid"
+	#   IFS=$' ' read -r _ver _rel _repo_source \
+	#       < <(printf '%s\n' "$last_sentence" | grep "$repo_ver" | grep "$repo_rel") > /dev/null || {
+	#       cat "$repo_target/keys"
+	#       // die '$repo_target/keys' "query failed on \"$repo_target/keys\""
+	#   }
+	# }
+	# # Keys design end
+
+	// log '$pkg_name' "$pkg_name"
+	local dir ver rel alias url _reference_type
+	/ "IFS=$(printf '%b' "\x03") read -r \
+		dir ver rel alias url _reference_type \
+		<< $(// here_doc -- pkg_version "$pkg_name" "" "-d" "$KISS_ROOT/$sys_db")" \
+		> /dev/null || // die 'pkg_version' "failed"
+
+	[ "$repo_ver" == "$ver" ] && [ "$repo_rel" == "$rel" ] ||
+	// die '$pkg_name' "$pkg_name"
+
+	// density_out "$repo_target" "${target_source-}" "0"
+	# // density_out "$repo_target" "$target_source" "0"
+	// density_out "$target_source" "${target_source-}" "1"
+	# // density_out "$target_source" "$target_source" "1"
+
+	// cue "$pkg_name" "Installed successfully"
+}
+
+removable() {
+	_level_2
+	local repo_urn="$1"
+	local pkg_name="${repo_urn##*/}"
+	pkg_name="${pkg_name%%@*}"
+	set -- "$pkg_name"
+	# Check if a package is removable and die if it is not.
+	# A package is removable when it has no dependents.
+	// log "$pkg_name" "checking if package removable"
+
+	cd "$KISS_ROOT/$sys_db"
+	set +f
+	pkg_name="$1"
+	// log '$pkg_name' "$pkg_name"
+
+	[ -n "${KISS_FORCE+x}" ] ||
+	! grep -lFx -- "$pkg_name" */depends ||
+		// die "$pkg_name" "Not removable, has dependents"
+
+	set -f
+	cd "$OLDPWD"
+}
+
+# $1 repo_urn : package repo url/uri
+# could be subshell function before local version
+pkg_remove() {
+	_level_2
+	local repo_urn="$1"
+	local pkg_name="${repo_urn##*/}"
+	pkg_name="${pkg_name%%@*}"
+	local repo_target="$KISS_ROOT/$sys_db/$pkg_name"
+	// log '$repo_target' "$repo_target"
+	# Remove a package and all of its files. The '/etc' directory is handled
+	# differently and configuration files are *not* overwritten.
+	[ -d "$repo_target" ] || // die '$pkg_name' "'$pkg_name' is not installed"
+
+	# Intended behavior.
+	# shellcheck disable=2030,2031
+	[ -n "${KISS_FORCE+x}" ] || // removable "$pkg_name"
+
+	# Block being able to abort the script with 'Ctrl+C' during removal.
+	# Removes all risk of the user aborting a package removal leaving an
+	# incomplete package installed.
+	# trap '' INT
+	// trap_off
+
+	# arg1: pre-remove
+	# arg2: package name
+	# arg3: path to installed database
+	// run_hook_pkg pre-remove "$pkg_name"
+	// run_hook     pre-remove "$pkg_name" "$repo_target"
+
+	// log '$pkg_name' "$pkg_name"
+	// log "removing package" "$pkg_name"
+	# Make a backup of any etcsums if they exist.
+	[ ! -f "$repo_target/manifest" ] || {
+		[ ! -s "$repo_target/etcsums" ] &&
+		// remove_files < "$repo_target/manifest" || {
+			local etcsums_clone="$(
+				// delegate -- slot_push "$pkg_name" "$repo_target/etcsums")"
+			// remove_files < "$repo_target/manifest" 3< "$etcsums_clone"
+		}
+	}
+	// as_own "$KISS_ROOT/" rm -rf "$repo_target"
+	# Reset 'trap' to its original value. Removal is done so
+	# we no longer need to block 'Ctrl+C'.
+	# trap '// clean_all "r" "$pkg_name"' EXIT INT
+	// trap_on "r" "$pkg_name"
+
+	// log "$pkg_name" "removed successfully"
+}
+
+pkg_swap() {
+	_level_2
+	# Swap between package alternatives.
+	[ -d "$sys_db/$1" ] || // die '$sys_db/$1' "not found $sys_db/$1"
+
+	local fake_route="$(// delegate -- replace "$1$2" '>' '/')"
+
+	[ -f "$sys_ch/$fake_route" ] || [ -h "$sys_ch/$fake_route" ] ||
+		// die "$sys_ch/$fake_route" "Alternative '$1 ${2:-null}' doesn't exist"
+
+	if [ -f "$KISS_ROOT/${2#/}" ]; then
+		// am_own "/${2#/}" ||
+			// die '$2' "File '$2' exists on filesystem but isn't owned"
+
+		// log "swapping '$2'" "to '$1'"
+
+		# Convert the current owner to an alternative and rewrite its manifest
+		# file to reflect this.
+		// as_own "$KISS_ROOT/" cp -Pf "$KISS_ROOT/${2#/}" "$sys_ch/$_owns>${fake_route#*>}"
+		// manifest_replace "$_owns" "$2" "/$cho_db/$_owns>${fake_route#*>}"
+	fi
+
+	# Convert the desired alternative to a real file and rewrite the manifest
+	# file to reflect this. The reverse of above.
+	mv -f "$sys_ch/$fake_route" "$KISS_ROOT/${2#/}"
+	// manifest_replace "$1" "/$cho_db/$fake_route" "$2"
+}
+
+# "$@" :
+pkg_alternatives() {
+	_level_2
+	if equ "$1" -; then
+		while read -r pkg_name path; do
+			// pkg_swap "$pkg_name" "$path"
+		done
+
+	elif ok "$1"; then
+		// pkg_swap "$@"
+
+	else
+		# Go over each alternative and format the file
+		# name for listing. (pkg_name>usr>bin>ls)
+		set +f; for pkg_name in "$sys_ch/"*; do
+			local real_route="$(// delegate -- replace "${pkg_name##*/}" '/' '>')"
+			# printf '%s %s\n' "${real_route%%/*}" "/${real_route#*/}"
+			// log "${real_route%%/*}" "/${real_route#*/}"
+		done
+		set -f
+	fi
+}
+
+action="$1"
+shift 1
+
+case $action in
+	i|install)
+		pkg_install "$@";;
+	r|remove)
+		pkg_remove "$@";;
+	a|alternatives)
+		pkg_alternatives "$@";;
+esac
+
+
+

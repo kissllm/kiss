@@ -1,0 +1,340 @@
+#! /bin/sh -e
+# Background log processes maintained by kiss itself
+# Independent pipe processes implementation for logs
+# Usage
+# env \
+#     DEBUG_AT_BACKGROUND="$DEBUG_AT_BACKGROUND" \
+#     KISS_TMPDIR="$KISS_TMPDIR" \
+#     USER_OUTPUT="$USER_OUTPUT" \
+#     INIT_OUTPUT="$INIT_OUTPUT" \
+# nohup "/usr/bin/kiss-pipe" "$pid_name" "$output_target"
+# ps -o pid,user,args | grep {kiss-pipe} | grep -v grep | awk "\$2 == \"$USER\" { print }"
+# ps -ef | grep {kiss-pipe}
+
+[ ! -z "${IS_KISS+x}" ] && set -auf || set -aufE
+
+alias /='eval'
+alias //='lineno="$LINENO"'
+#
+# FS       : field separator
+: ${FS:="\x03"} && export FS
+# RS       : record separator
+: ${RS:="\x1f"} && export RS
+
+SCRIPT_NAME="kiss-pipe" && export SCRIPT_NAME
+
+# If you need to enable input
+# [ -t 0 ] || {
+#     printf '%s %s\n' 'fd 0' "does not work at $LINENO" >> "$INIT_OUTPUT"
+#     exec </dev/tty
+# }
+
+# [ -t 0 ] || { printf '%s %s\n' 'fd 0' "recovered" >> "$INIT_OUTPUT"; exec </dev/tty; }
+# If you need to enable output
+# [ -t 1 ] || { printf '%s %s\n' 'fd 1' "recovered" >> "$INIT_OUTPUT"; exec &>$(tty); exec &>/dev/tty; }
+# [ -t 1 ] || { printf '%s %s\n' 'fd 1' "recovered" >> "$INIT_OUTPUT"; exec &>/dev/tty; }
+# [ -t 2 ] || { printf '%s %s\n' 'fd 2' "recovered" >> "$INIT_OUTPUT"; exec &>$(tty); exec &>/dev/tty; }
+# [ -t 2 ] || { printf '%s %s\n' 'fd 2' "recovered" >> "$INIT_OUTPUT"; exec &>/dev/tty; }
+
+: "${DEBUG_AT_BACKGROUND=}"
+printf '%s %s\n' '$DEBUG_AT_BACKGROUND' "defined" >> "$INIT_OUTPUT"
+
+printf '%s %s\n' '$KISS_TMPDIR' "$KISS_TMPDIR" >> "$INIT_OUTPUT"
+printf '%s %s\n' '$INIT_OUTPUT' "$INIT_OUTPUT" >> "$INIT_OUTPUT"
+
+debug_filter() (
+	[ "$1" != "--" ] || shift 1
+	# _level_0
+	# printf '%s %s\n' '$scope' "$scope"
+	# $func_name == debug_filter
+	# printf '%s %s\n' '$func_name' "$func_name"
+	# local scope="$1"
+	# shift 1
+	# local result=1
+
+	[ -n "${DEBUG_AT_BACKGROUND+x}" ] && {
+		(
+			(
+				exec 8>"$KISS_TMPDIR/logs/.lock_pipe_log";
+				flock -n 8 || { return 1; }
+				# exec 8>&- "$@" >> "$INIT_OUTPUT"
+				"$@" >> "$INIT_OUTPUT"
+				# exec 8>&-
+			) &
+		)
+		return 0
+	} ||
+	[ -n "${KISS_DEBUG+x}" ] || return 0
+
+	local ifs="$IFS"
+	local IFS=$','
+	# printf '%s %s\n' '$scope' "$scope"
+	local item
+	local match=0
+	for item in ${KISS_DEBUG:-}; do
+		case "$scope" in *"${item}"*)
+			# result=0
+			# match=1
+			"$@" &
+			break
+		esac
+	done
+	IFS="$ifs"
+
+	# equ "$match" "0" || "$@"
+	# return "$result"
+)
+
+# [ -t 1 ] || {
+#     # // war 'fd 1' "recovered"
+#     // debug_filter -- printf '%s %s\n' "fd 1" "recovered"
+#     # exec &>$(tty)
+#     exec &>/dev/tty
+# }
+name=
+current_user=
+pipe_reader() {
+	# _level_2
+	# / $fuction_line;
+	# / $recursive_detection;
+	# / $input_debug;
+
+	printf '%s %s\n' '$DEBUG_AT_BACKGROUND' "defined" >> "$INIT_OUTPUT"
+	printf '%s %s\n' '$KISS_TMPDIR' "$KISS_TMPDIR" >> "$INIT_OUTPUT"
+	printf '%s %s\n' '$INIT_OUTPUT' "$INIT_OUTPUT" >> "$INIT_OUTPUT"
+
+	[ "$#" -ge "2" ] || {
+		# // war '$#' "$# parameters are not enough"
+		// debug_filter -- printf '%s %s\n' "$#" "$# parameters are not enough"
+		exit
+	}
+
+	local pipe_pid="$$"
+
+	# PID_LOG/PID_SAY
+	local pid_name="$1"
+
+	local lower_pid_name="$(printf '%s' "$pid_name" | tr '[A-Z]' '[a-z]')"
+	name="$(expr substr "$lower_pid_name" 5 3)"
+	# // debug '$name' "$name"
+	// debug_filter -- printf '%s -- %s\n' '$name' "$name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]"
+
+	printf '%s -- %s\n' '$name' "$name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]" >> "$INIT_OUTPUT"
+	printf '%s -- %s\n' '$name' "$name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]"
+
+	# local lock_pipe=
+	/ "local lock_pipe=\"\$KISS_TMPDIR/logs/.lock_\${name}\""
+	[ -f "$lock_pipe" ] || touch "$lock_pipe"
+
+	local output_target="$2"
+
+	// debug_filter -- printf '%s -- %s\n' '$output_target' "$output_target [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]"
+	printf '%s -- %s\n' '$output_target' "$output_target [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]" >> "$INIT_OUTPUT"
+	# pipe address
+	local pipe
+	/ "pipe=\"\$KISS_TMPDIR/logs/\$name.pipe\""
+	current_user="$(whoami)"
+	# Deprecated
+	# local pipe_status="$5"
+
+	local content=
+	local pid=
+
+	# This is the pipe processing itself, while KISS_INNER_PIPE is in the kiss scope
+	# Think twice if they are doing the same job
+	# If you rm the pipe before killing the processes whom are sending message to the pipe
+	# you will get corrupted system call errors
+	# [ -z "${KISS_INNER_PIPE:+x}" ] || {
+	trap "exit" INT TERM QUIT PIPE
+	trap " \
+printf '%s %s\\n' 'USR1' \"triggered in \\\"\$func_name\\\"\" >> \"\$INIT_OUTPUT\"; \
+rm -f -- \"$pipe\"; \
+" USR1
+	trap " \
+printf '%s %s\\n' 'EXIT' \"triggered in \\\"\$func_name\\\"\" >> \"\$INIT_OUTPUT\"; \
+rm -f -- \"$pipe\"; \
+" EXIT
+
+	# // debug_filter -- \
+	# exit \
+	# // pipe_cancel \"$pid_name\"; \
+	# printf '%s\n' \"\${$pid_name} is going to be killed\"; \
+	# [ -z \"\${$pid_name:+x}\" ] || ! pid_alive \"\${$pid_name}\" || { \
+	# // execute \"$pid_name\" \"\${$pid_name}\"; $pid_name=; }; \
+	# " USR1 EXIT
+	# trap " \
+	# printf '%s\n' \"\${$pid_name} is going to be killed\"; \
+	# rm -f -- \"$pipe\" \
+	# " USR1
+	# }
+
+	# printf '%s %s\n' '$SESSION_PID' "$SESSION_PID"
+	# // log '$SESSION_PID' "$SESSION_PID"
+
+	// debug_filter -- printf '%s -- %s\n' '$pid_name' "$pid_name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]"
+
+	printf '%s -- %s\n' '$pid_name' "$pid_name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]" >> "$INIT_OUTPUT"
+	printf '%s -- %s\n' '$pid_name' "$pid_name [$LINENO : $FUNCNAME : ${0##*/} : $pipe_pid]"
+
+	# // debug '$pid_name' "$pid_name"
+
+	# // log '$pid_name' "$pid_name"
+
+	[ ! -e "$pipe" ] || rm -f -- "$pipe"
+	[ ! -f "$pipe" ] || rm -f -- "$pipe"
+	# [ -e "$pipe" ] ||
+	[ -p "$pipe" ] ||
+	mkfifo -m 644 "$pipe" ||
+	# mkfifo -m 644 "$pipe" 2>/dev/null ||
+	# false ||
+	{
+		/ "unset \$pid_name"
+
+		# echo "1" > "$pipe_status"
+
+		# kill 0
+		# Terminated
+		# // war '$pipe' "'$pipe' is not ready"
+		# // die '$pipe' "'$pipe' is not ready"
+
+		# pipe_cancel "PID_SAY"
+		# pipe_cancel "PID_LOG"
+		# # / // die "'\$pipe' \"'$pipe' is not ready\""
+		# ! pid_alive "$SESSION_PID" || kill -USR1 "$SESSION_PID"
+		# ! pid_alive "$SESSION_PID" || doas kill -KILL -"$SESSION_PID"
+
+		# kill 0
+		export KISS_DEBUG=
+		exit
+	}
+	# trap
+	# set --
+	# [ "$log_dir_user" == "$(whoami)" ] || set -- $(delegate -- as_user "$log_dir_user")
+	# // log '$@' "$(esceval "$@")"
+	local pipe_user="$(stat -c '%U' "$pipe")"
+	[ "$pipe_user" == "$(whoami)" ] ||
+	// debug_filter -- printf '%s %s\n' "$pipe_user owns" "$pipe [$LINENO : $FUNCNAME : ${0##*/}]"
+	[ -p "$pipe" ] ||
+	# [ -e "$pipe" ] ||
+	mkfifo -m 644 "$pipe" ||
+	# mkfifo -m 644 "$pipe" 2>/dev/null ||
+	{
+		/ "unset \$pid_name"
+
+		# echo "1" > "$pipe_status"
+
+		# // die '$pipe' "'$pipe' is not ready"
+		# / // die "'\$pipe' \"'$pipe' is not ready\""
+
+		# pipe_cancel "PID_SAY"
+		# pipe_cancel "PID_LOG"
+		# ! pid_alive "$SESSION_PID" || kill -USR1 "$SESSION_PID"
+		# ! pid_alive "$SESSION_PID" || doas kill -KILL -"$SESSION_PID"
+
+		# kill 0
+		export KISS_DEBUG=
+		exit
+	}
+
+	# echo "0" > "$pipe_status"
+	# // debug_filter -- \
+	#     printf '%s -- %s\n' '${0##*/} : id : name : own' \
+	#     "$pipe_pid : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]"
+
+	# printf '%s -- %s\n' 'id : name : own' \
+	# "$pipe_pid : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]" >> "$INIT_OUTPUT"
+
+	while :; do
+		# [ -p "$pipe" ] || mkfifo -m 644 "$pipe" 2>/dev/null || :
+		# { // war '$pipe' "'$pipe' was killed"; break; }
+		(
+			[ ! -e "$pipe" ] || [ ! -p "$pipe" ] ||
+			while # [ -p "$pipe" ] && [ -e "$pipe" ] &&
+				IFS="$newline" read -r content >/dev/null 2>&1 ||
+				[ -n "${content:+x}" ]
+			do
+				# while IFS="$newline" read -r content || ok "$content"; do
+				# [ -z "$content" ] || "$@" flock -x "$lock_pipe" -c \
+				# "$("$@" printf '%s\n' "$content" >> "$output_target")"
+				[ -z "$content" ] || {
+					(
+						# touch "$lock_pipe"
+						exec 9>"$lock_pipe"
+						flock -x 9 || {
+							exit 1
+						}
+						# exec 9>&- printf '%s\n' "$content" >> "$output_target" 2>&1
+						printf '%s\n' "$content" >> "$output_target" 2>&1
+						# exec 9>&-
+					) &
+
+					pid="$!"
+					pid_list="${pid_list:+"${pid_list} "}$pid"
+					wait $pid
+
+					# Some special charaters to get status
+					[ -n "${content##*"$(printf '%b' '$FS')"*}" ] || {
+						# printf '%s\n' "$content" > /dev/stderr
+						# printf '%s\n' "$content" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' \
+						#     >> "$INIT_OUTPUT" 2>&1
+
+						# // debug_filter -- \
+						#     printf '%s %s\n' 'id : name : own'
+						#     "$pipe_pid : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]"
+						printf '%s -- %s\n' 'id : name : own' "$pipe_pid : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]" >> "$INIT_OUTPUT"
+
+						# "$(delegate -- format "$pipe_pid") : $name : $current_user : $pipe_pid"
+
+						# kill 0 ||
+						# // kill_subtree "$KISS_PID"
+						# exit
+					}
+
+					[ -n "${content##*"[$(printf '%b' 'EOF')]"*}" ] || {
+						# printf '%s\n' "$content" > /dev/stderr
+						printf '%s\n' "$content" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' \
+							>> "$INIT_OUTPUT" 2>&1
+						break 2
+						# kill 0 ||
+						# // kill_subtree "$KISS_PID"
+						exit
+					}
+				}
+				content=
+			done < "$pipe" || {
+				break 2
+				pipe_available=0
+				# // war "$pipe" "reading failed"
+				// debug_filter -- printf '%s %s\n' "$pipe" "reading failed [$LINENO : $FUNCNAME : ${0##*/}]"
+			}
+			# 2>/dev/null following < "$pipe" will mute all messages
+			# -- the screen output default sending output_target is /dev/stderr on current design
+			# done < "$pipe" 2>/dev/null || { pipe_available=0; // die "$pipe" "reading failed"; break; }
+			#  2>/dev/null at the end of the following line will mute messages in "|| {}" part
+			# done < "$pipe" || { pipe_available=0; // die "$pipe" "reading failed"; break; } 2>/dev/null
+		) || :
+	done
+}
+
+[ -z "${USE_PIPE_STAT_INTERFACE+X}" ] || {
+	pid_target=
+	pipe_status="$1"
+	shift 1
+}
+
+: "${func_name:="${0##*/}"}"
+: "${scope:="${func_name}"}"
+[ -z "${USE_PIPE_STAT_INTERFACE+X}" ] &&
+: "${lineno="$((LINENO + 3))"}" || : "${lineno="$((LINENO + 4))"}"
+: "${lineno_scope="$lineno"}"
+[ -z "${USE_PIPE_STAT_INTERFACE+X}" ] && {
+pipe_reader "$@"; :; } ||
+nohup pipe_reader "$@" > /dev/null 2>&1 & pid_target="$!"
+
+[ -z "${USE_PIPE_STAT_INTERFACE+X}" ] ||
+printf '%s\n' "$pid_target" > "$pipe_status"
+
+# printf '%s -- %s\n' 'id : name : own' \
+#     "$pipe_pid : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]" >> "$INIT_OUTPUT"
+# printf '%s -- %s\n' 'id : name : own' \
+#     "$pid_target : $name : $current_user [$LINENO : $FUNCNAME : ${0##*/}]" >> "$INIT_OUTPUT"

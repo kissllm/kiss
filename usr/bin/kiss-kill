@@ -1,0 +1,82 @@
+#!/bin/sh -aueEf
+# Kill kiss processes
+
+# How to debug
+# sh -x /usr/bin/kiss-kill || :
+
+# trap 'exit' INT TERM QUIT
+# trap 'stty intr ; exit' INT TERM QUIT
+# trap "// kill_name \"\" $@" EXIT
+# trap " \
+# // kill_name \"\" $*; \
+# " USR1
+set -- "" "$@"
+unset KILL_LIST
+USE_PIPE_ID=
+# Items will be removed the protection from protected_list
+: "${KILL_LIST:="{kiss} {kiss-impl} {kiss-pipe} {${0##*/}} tee {subshell-on-bui} $*"}" && export KILL_LIST
+# [ -n "${HEADER+x}" ] ||
+# shellcheck source=/usr/include/kiss-share
+. /usr/include/kiss-share > /dev/null 2>&1
+[ -z "${KISS_DEBUG+x}" ] || printf '%s %s\n' '$KILL_LIST' "$KILL_LIST"
+// log '' ""
+// log '$@' "$(esceval "$@")"
+# trap " \
+# // war 'EXIT' \"triggered in \\\"\$func_name\\\"\"; \
+# // pipe_cancel \"PID_LOG\"; \
+# // pipe_cancel \"PID_SAY\"; \
+# // kill_all {kiss} {kiss-impl} {${0##*/}} tee {subshell-on-bui} $* \
+# " EXIT
+# listen
+# // debug_filter -- \
+[ -z "${KISS_DEBUG+x}" ] || trap
+
+# iii
+
+# item_list=
+# pkg_name=
+# for pkg_name do
+#     item_list="${item_list:+"${item_list}${newline}"}$(ps -ef | \
+#     grep -v grep | grep -v "$$" | grep -v "$SESSION_PID" | \
+#     grep -v "$PID_SAY" | grep -v "$PID_LOG" | \
+#     grep "$pkg_name")"
+#     # grep "$pkg_name" | awk "{print \$1}" | tr -d ' ')"
+# done
+#
+# # // log '$item_list' "$item_list"
+#
+# printf '%s\n%s\n' '$item_list' "$item_list"
+# protected_list=
+# job_list=
+# pid=
+# ifs="$IFS"
+# IFS=$'\n'
+# printf '%s\n' 'protected items'
+# for item in $item_list; do
+#     # item="$(// delegate -- pid_args "$pid")"
+#     pid="$(printf '%s\n' "$item" | awk "{print \$1}" | tr -d ' ')"
+#     process="$(printf '%s' "$item" | awk "{print \$4}")"
+#     [ -n "${process:+x}" ] &&
+#     [ -z "${process##*"kiss"*}" ] || {
+#         # // log '$item' "$item"
+#         printf '%s\n' "$item"
+#         protected_list="${protected_list:+"${protected_list}${newline}"}$pid"
+#         continue
+#     }
+#     ! pid_alive "$pid" ||
+#     job_list="${job_list:+"${job_list}${newline}"}$pid"
+# done
+#
+# IFS="$ifs"
+#
+# printf '%s\n%s\n' '$job_list' "$job_list"
+# printf '%s\n%s\n' '$protected_list' "$protected_list"
+
+# // kill_name "" "$@"
+# // pipe_cancel "PID_LOG"
+# // pipe_cancel "PID_SAY"
+
+# // kill_all "$@"
+# // kill_jobs "$job_list" "$protected_list"
+
+# kill 0

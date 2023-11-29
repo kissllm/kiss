@@ -1,0 +1,221 @@
+#! /bin/sh -e
+# Aports package assistant
+#! /proc/parent/exe --
+#
+# The following envrionment variables/functions might be overwrited by build script
+#
+
+[ ! -z "${IS_KISS+x}" ] && set -Eau || set -au
+# set -eEau
+check_pipefail="$(set -o | grep pipefail | awk "{print \$1}")"
+[ "$check_pipefail" != "pipefail" ] || set -o pipefail
+
+# trap '
+# printf '%s\n' "1" > "$KISS_TMPDIR/logs/build_state"
+# kill -9 "$SESSION_PID"
+# ' ERR
+
+interrupt_type="$(type "interrupt" 2> /dev/null)" || :
+{
+	[ ! -z "${interrupt_type:+x}" ] &&
+	[ -z "${interrupt_type##*"alias"*}" ]
+	# set | grep -q _level > /dev/null &&
+	# [ -n "${HEADER+x}" ]
+} || {
+
+	# Outdated option: shellcheck source=/dev/null
+	# shellcheck source=/usr/include/kiss-share
+	. /usr/include/kiss-share
+	# . /usr/include/kiss-share > /dev/null 2>&1
+
+	[ -t 0 ] || // die 'fd 0' "does not work"
+	# export $(cut -d= -f1 /usr/include/kiss-share)
+
+	# -ash: //: Permission denied -- // is not defined
+	# // war '$HEADER' "$HEADER"
+
+	# export HEADER=
+}
+
+// log 'Inside' "kiss-abuild"
+
+# [ -z "${PKG_DIR:+x}" ] || [ -z "${PKG_VER:+x}" ] ||
+# set -- "$PKG_DIR" "$PKG_VER"
+
+pkgdir="$1"
+// log '$pkgdir' "$pkgdir"
+
+srcdir="$PWD"
+// log '$srcdir' "$srcdir"
+builddir="$PWD"
+// log '$builddir' "$builddir"
+
+# For fakeroot and language packs? (search subpkgdir= in abuild.in)
+subpkgdir="$pkgdir"
+// log '$subpkgdir' "$subpkgdir"
+
+abuild_test="133"
+
+msg() {
+	# printf '%s\n' "$1"
+	// log '' "$1"
+}
+
+amove() {
+	[ -n "$pkgdir" ] || return 1
+	[ -n "$subpkgdir" ] || return 1
+	[ "$subpkgdir" != "$pkgdir" ] || return 1
+
+	# store directory
+	d="$(pwd -L)"
+
+	cd "$pkgdir"
+	local pattern f
+	for pattern; do
+		for f in ${pattern#/}; do # let shell expand the pattern
+			# strip trailing /
+			f=${f%/}
+			if [ "${f%/*}" != "$f" ]; then
+				mkdir -p "$subpkgdir/${f%/*}"
+				mv -v "$pkgdir"/$f "$subpkgdir/${f%/*}"
+			else
+				mkdir -p "$subpkgdir"
+				mv -v "$pkgdir"/$f "$subpkgdir/"
+			fi
+			# cleanup
+			rmdir -p "$f" 2>/dev/null || rmdir -p "${f%/*}" 2>/dev/null || true
+		done
+	done
+
+	cd "$d"
+}
+
+# grep default /working/os/abuild/*.in
+# abuild/abuild-keygen.in:	  local emailaddr default_name
+# "local" can not be use globally
+# local emailaddr default_name
+# git config -l | grep user.name | awk -F "=" "{print \$2}"
+
+emailaddr="$(git config -l | grep user.email | awk -F "=" "{print \$2}")"
+: "${USER:="$(whoami)"}"
+[ -z "${emailaddr:+x}" ] || emailaddr="$USER@mail.com"
+
+# abuild/abuild-keygen.in:	  default_name="${emailaddr:-$USER}-$(printf "%x" $(date +%s))"
+# default_name="${emailaddr:-$USER}-$(printf "%x" $(date +%s))"
+# git config -l | grep user.name | awk -F "=" "{print \$2}"
+
+default_name="$(git config -l | grep user.name | awk -F "=" "{print \$2}")"
+[ -z "${default_name:+x}" ] || default_name="$USER"
+
+# abuild/abuild-keygen.in:	  privkey="$ABUILD_USERDIR/$default_name.rsa"
+export ABUILD_USERDIR="$USER"
+privkey="$ABUILD_USERDIR/$default_name.rsa"
+
+# abuild/abuild-keygen.in:				-n					 Non-interactive. Use defaults
+# abuild/abuild-keygen.in:			  elevate privileges, if it is not set it defaults to doas or sudo if doas
+# abuild/abuild.in:# defaults
+# abuild/abuild.in:# we override the default msg, warning and error as we want the pkgname
+# abuild/abuild.in:default_cleanup_srcdir() {
+default_cleanup_srcdir() { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_sanitycheck() {
+default_sanitycheck()	 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_fetch() {
+default_fetch()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_unpack() {
+default_unpack()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_prepare() {
+default_prepare()		 {
+	for item in *.patch; do
+		// log 'patching' "$item"
+		patch -p1 < "$item" || // die "$item" "patching failed"
+	done
+	// log "$FUNCNAME" "passed"
+}
+# abuild/abuild.in:default_lang() {
+default_lang()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_lang_subpkg() {
+default_lang_subpkg()	 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_check() {
+default_check()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_doc() {
+default_doc()			 {
+	local gzip=$(command -v pigz || echo gzip)
+	# depends="$depends_doc"
+	pkgdesc="$pkgdesc (documentation)"
+	install_if="docs $pkgname=$pkgver-r$pkgrel"
+
+	local i
+	for i in doc man info html sgml licenses gtk-doc ri help; do
+		if [ -d "$pkgdir/usr/share/$i" ]; then
+			mkdir -p "$subpkgdir/usr/share"
+			mv "$pkgdir/usr/share/$i" "$subpkgdir/usr/share/"
+		fi
+	done
+
+	# compress man pages
+	local mandir="$subpkgdir"/usr/share/man
+	[ -d "$mandir" ] && find "$mandir" -type l \
+		-a \( -name \*.[0-8n] -o -name \*.[0-8][a-z]* \) \
+		-a \! \( -name '*.gz' -o -name '*.bz2' -o -name '*.xz' \) \
+		| while read symlink; do
+
+		ln -s $(readlink $symlink).gz "$symlink".gz
+		rm -f "$symlink"
+	done
+	[ -d "$mandir" ] && find "$mandir" -type f \
+		-a \( -name \*.[0-8n] -o -name \*.[0-8][a-z]* \) \
+		-a \! \( -name '*.gz' -o -name '*.bz2' -o -name '*.xz' \) \
+		-exec stat -c "%i %n" \{\} \+ | while read inode name; do
+
+		# Skip hardlinks removed in last iteration.
+		[ -f "$name" ] || continue
+
+		local islink=0
+		find "$mandir" -type f -links +1 \
+			-a \( -name \*.[0-8n] -o -name \*.[0-8][a-z]* \) \
+			-a \! \( -name '*.gz' -o -name '*.bz2' -o -name '*.xz' \) \
+			-exec stat -c "%i %n" \{\} \+ | while read linode lname; do
+			if [ "$linode" = "$inode" -a "$lname" != "$name" ]; then
+				islink=1
+				rm -f "$lname"
+				ln -s "${name##*/}".gz "$lname".gz
+			fi
+		done
+
+		[ $islink -eq 0 ] && $gzip -n -9 "$name"
+	done
+
+	rm -f "$subpkgdir/usr/share/info/dir"
+
+	# remove if empty, ignore error (not empty)
+	rmdir "$pkgdir/usr/share" "$pkgdir/usr" 2>/dev/null || :
+	// log "$FUNCNAME" "passed"
+}
+# abuild/abuild.in:default_dbg() {
+default_dbg()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_dev() {
+default_dev()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_static() {
+default_static()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_libs() {
+default_libs()			 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_openrc() {
+default_openrc()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_bashcomp() {
+default_bashcomp()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_zshcomp() {
+default_zshcomp()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:default_fishcomp() {
+default_fishcomp()		 { // log "$FUNCNAME" "passed"; }
+# abuild/abuild.in:# Base version defaults to 0 except if specified by $verbase.
+# abuild/abuild.in:			   -D  Set APKINDEX description (default: \$repo \$(git describe))
+# abuild/apkbuild-cpan.in:	  default {
+# abuild/apkbuild-pypi.in:	  } default {
+# abuild/buildlab.in:default_colors() {
+default_colors()		 { // log "$FUNCNAME" "passed"; }
+# abuild/buildlab.in:default_colors
+# abuild/buildlab.in:		  'c') default_colors
+# abuild/newapkbuild.in:	  default_prepare
+
+# sh: set ts=4 sw=4 tw=0 et :
+

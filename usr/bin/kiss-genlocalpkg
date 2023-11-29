@@ -1,0 +1,36 @@
+#!/usr/bin/bash
+
+[ -z $1 ] && echo "Provide a package name" && exit 1
+
+cac_dir="${XDG_CACHE_HOME:-${HOME:?HOME is null}/.cache}/kiss"
+pkg=$1
+
+#get primary path
+directory=$(awk 'NR==1{print $1}' <<< "$(kiss search $pkg)")
+
+rm -rf $pkg
+mkdir $pkg
+cd $pkg
+cp -v $directory/version .
+[ -e "$directory/depends" ] && cp -v $directory/depends .
+[ -e "$directory/depends" ] && sed -i '/.* make$/d' ./depends
+
+cat << 'EOF' > ./build
+#!/bin/sh -e
+:> nostrip
+cp -a * "$1/"
+EOF
+
+chmod +x ./build
+
+version=$(sed 's/ /-/g' ./version)
+
+#upload package to ftp
+curl --user $ftpuser -T "$cac_dir/bin/${pkg}@${version}.tar.zst" $ftpaddress
+
+#set sources
+echo  "$httpaddress/${pkg}@${version}.tar.zst" > ./sources
+
+#generate checksum
+kiss c
+cd ..

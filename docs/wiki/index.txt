@@ -1,0 +1,79 @@
++------------------------------------------------------------------------------+
+|                                                                              |
+|                   _  _____ ___ ___  __      _____ _  _____                   |
+|                  | |/ /_ _/ __/ __\ \ \    / /_ _| |/ /_ _|                  |
+|                  | ' < | |\__ \__ \  \ \/\/ / | || ' < | |                   |
+|                  |_|\_\___|___/___/   \_/\_/ |___|_|\_\___|                  |
+|                                                                              |
+|                Documentation and information about KISS Linux.               |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+
+Distribution               System                      Universe
+
+ @/package-system           @/service-management        @/forks
+ @/package-manager          @/device-management         @/repositories
+ @/KISS_PATH                @/hostname
+ @/website                  @/manual-pages
+ @/testimonials
+ @/screenshots
+
+
+Official Repositories
+
+ %/adwaita-icon-theme       %/hicolor-icon-theme        %/opendoas
+ %/alsa-lib                 %/intel-vaapi-driver        %/openresolv
+ %/alsa-utils               %/json-c                    %/openssh
+ %/atk                      %/kirc                      %/openssl
+ %/baseinit                 %/kiss                      %/opus
+ %/baselayout               %/lame                      %/pango
+ %/binutils                 %/libass                    %/pcre
+ %/bison                    %/libdrm                    %/perl
+ %/busybox                  %/libelf                    %/pigz
+ %/bzip2                    %/libffi                    %/pixman
+ %/cairo                    %/libinput                  %/pkgconf
+ %/cbindgen                 %/libjpeg-turbo             %/python
+ %/ccache                   %/libogg                    %/rust
+ %/clang                    %/libpciaccess              %/samurai
+ %/cmake                    %/libpng                    %/scdoc
+ %/curl                     %/libseat                   %/slurp
+ %/dhcpcd                   %/libtheora                 %/sqlite
+ %/dosfstools               %/libudev-zero              %/ssu
+ %/e2fsprogs                %/libva                     %/strace
+ %/efibootmgr               %/libva-utils               %/sway
+ %/efivar                   %/libvorbis                 %/tiff
+ %/eiwd                     %/libvpx                    %/ttf-croscore
+ %/expat                    %/libwebp                   %/tzdata
+ %/ffmpeg                   %/libxkbcommon              %/util-linux
+ %/firefox                  %/linux-headers             %/vim
+ %/firefox-privacy          %/llvm                      %/wayland
+ %/flex                     %/m4                        %/wayland-protocols
+ %/fontconfig               %/make                      %/wbg
+ %/foot                     %/man-pages                 %/wl-clipboard
+ %/freetype-harfbuzz        %/mandoc                    %/wlroots
+ %/gcc                      %/mdevd                     %/wlsunset
+ %/gdk-pixbuf               %/mesa                      %/wpa_supplicant
+ %/git                      %/meson                     %/x264
+ %/glib                     %/mold                      %/x265
+ %/gnugrep                  %/mpv                       %/xkeyboard-config
+ %/gnupg1                   %/musl                      %/xvidcore
+ %/grim                     %/mutt                      %/xz
+ %/grub                     %/nasm                      %/zlib
+ %/gtk+3                    %/ncurses                   %/zstd
+                            %/nodejs
+
+
+
+
+                    +-------------------------------------+
+                    |                        ;;;;;;;;;;;;;|
+                    | XORG                   ;\;;;\\;;;|;;|
+                    |                         ;\\;;|;|;;|||
+                    |                          ;'| '    ;||
+                    |         .---.              | | |   ||
+                    |;;;     [     ]       ;;@   | | '   ||
+                    |@;@;;   |  X  |     ;@;;;;_/    |   \|
+                    |;;;@;;@ |     |   ;;;;;;@/   /;;\    |
+                    +-------------------------------------+
+
