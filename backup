@@ -1,4 +1,4 @@
-# !/bin/sh -e
+#! /bin/sh -e
 
 remote_url="$("$@" git remote -v 2> /dev/null | \
 			grep fetch | grep origin | awk '{print $2}')"
@@ -9,3 +9,4 @@ remote_url="$("$@" git remote -v 2> /dev/null | \
 }
 
 rsync -aqz --exclude ".backup" --exclude ".git*" --delete-excluded ./. ./.backup/
+sync

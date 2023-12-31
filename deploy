@@ -1,7 +1,59 @@
-# !/bin/sh -e
-
-# target_prefix="/home/kiss/lm/chroot-x86_64/usr"
+#! /bin/sh -e
+# Usage
+# Deploy to $KISS_ROOT
+# deploy
+# Deploy to /
+# deploy ""
+# Deploy to "/home/kiss/lm/chroot-x86_64"
+# deploy "/home/kiss/lm/chroot-x86_64"
+#
+# target_prefix="/home/kiss/lm/chroot-x86_64"
+#
 echo "\$PWD = $PWD"
-target_prefix="${1:?"Must give target prefix like \"/home/kiss/lm/chroot-x86_64/usr\""}"
-for item in $(\ls -1 usr/bin); do [ ! -e "$target_prefix/bin/$item" ] || doas \rm -f "$target_prefix/bin/$item"; doas ln -sf "$PWD/usr/bin/$item" "$target_prefix/bin/$item";  done
-for item in $(\ls -1 usr/include); do [ ! -e "$target_prefix/include/$item" ] || doas \rm -f "$target_prefix/include/$item"; doas ln -sf "$PWD/usr/include/$item" "$target_prefix/include/$item";  done
+echo "\$0   = $0"
+
+source_prefix="$PWD"
+[ "$PWD" = "${0%/*}" ] || source_prefix="${0%/*}"
+source_prefix="$(readlink -fn "$source_prefix")"
+echo "\$source_prefix = $source_prefix"
+
+target_prefix="$KISS_ROOT"
+# target_prefix="${1:?"Must give target prefix like \"/home/kiss/lm/chroot-x86_64\""}"
+[ -z "${1+x}" ] || target_prefix="$1"
+[ -z "${1:+x}" ] ||
+target_prefix="$(readlink -fn "$target_prefix")"
+echo "\$target_prefix = $target_prefix"
+
+
+ifs="$IFS"
+IFS="
+"
+
+for item in $(\ls -1 "$source_prefix/usr/bin"); do
+	echo "\$item  = $item is going to be deploied"
+	[ ! -e "$target_prefix/usr/bin/$item" ] ||
+	doas \rm -f "$target_prefix/usr/bin/$item";
+	doas ln -sf "$source_prefix/usr/bin/$item" "$target_prefix/usr/bin/$item";
+done
+
+[ -d "$target_prefix/usr/include/kiss" ] ||
+doas \mkdir -p "$target_prefix/usr/include/kiss"
+
+for item in $(\ls -1 "$source_prefix/usr/include/kiss"); do
+	echo "\$item  = $item is going to be deploied"
+	[ ! -e "$target_prefix/usr/include/kiss/$item" ] ||
+	doas \rm -f "$target_prefix/usr/include/kiss/$item";
+	doas ln -sf "$source_prefix/usr/include/kiss/$item" "$target_prefix/usr/include/kiss/$item";
+done
+
+echo "Deployed to $target_prefix/usr/bin"
+for item in $(\ls -al "$target_prefix/usr/bin" | grep kiss); do
+	echo "\$item  = $item"
+done
+
+echo "Deployed to $target_prefix/usr/include/kiss"
+for item in $(\ls -al "$target_prefix/usr/include/kiss"); do
+	echo "\$item  = $item"
+done
+
+IFS="$ifs"

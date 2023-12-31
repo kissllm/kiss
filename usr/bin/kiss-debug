@@ -1,0 +1,6 @@
+#! /bin/sh
+# Debug kiss itself
+unset KISS_AS_LIBRARY
+set -x
+/usr/bin/kiss "$@"
+set +x

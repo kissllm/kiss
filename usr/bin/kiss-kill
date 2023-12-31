@@ -1,8 +1,532 @@
-#!/bin/sh -aueEf
-# Kill kiss processes
+#! /bin/sh -e
+# Kill kiss background processes
+
+[ ! -z "${IS_KISS+x}" ] && set -Eauf || set -auf
+
+check_pipefail="$(set -o | grep pipefail | awk "{print \$1}")"
+[ "$check_pipefail" != "pipefail" ] || set -o pipefail
 
 # How to debug
 # sh -x /usr/bin/kiss-kill || :
+
+SCRIPT_NAME="kiss-kill" && export SCRIPT_NAME
+printf '%s\n' "Inside $SCRIPT_NAME"
+
+interrupt_type="$(type "interrupt" > /dev/null && type "interrupt")" || :
+{
+	[ ! -z "${interrupt_type:+x}" ] # &&
+	# [ -z "${interrupt_type##*"alias"*}" ]
+	# [ -n "${HEADER+x}" ] ||
+} || {
+	# shellcheck source=/usr/include/kiss/share
+	. /usr/include/kiss/share > /dev/null 2>&1
+	[ -t 0 ] || // die 'fd 0' "does not work"
+}
+
+# $1 : action
+# $2 $3 ... processes name
+[ -z "${KISS_INNER_PIPE:+x}" ] ||
+kill_name() {
+	_level_0
+	# printf '%s %s\n' 'Low level' "kill"
+	// log '$_KISS_LVL' "$_KISS_LVL cleaning"
+	local action="$1"
+	// debug '$action' "$action"
+	shift 1
+	! is_pick "$action" || set -- "${1-"${PWD##*/}"}"
+	[ "$scope" = "pipe_cancel" ] || {
+		# [ -z "${USE_SAY_PIPE+x}" ] ||
+		// debug_filter -- printf '%s %s\n' '$PID_SAY' "${PID_SAY-}"
+		// debug_filter -- printf '%s %s\n' '$PID_LOG' "${PID_LOG-}"
+		# [ -z "${USE_SAY_PIPE+x}" ] ||
+		// pipe_cancel "PID_SAY"
+		// pipe_cancel "PID_LOG"
+	}
+	// debug_filter -- printf '%s %s\n' '$scope' "$scope"
+	// debug_filter -- printf '%s %s\n' '$0' "'$0'"
+	// debug_filter -- printf '%s %s\n' '$$' "'$$'"
+	local wreckages=
+	local residues=
+	local repo_name=
+	local self_name="{${0##*/}}"
+	for repo_name do
+		local repo_list="$(// as_own "$REPO_ROOT/" \
+			find -L "$REPO_ROOT/" \( -type d -o -type l \) -name "${repo_name}")"
+		# Otherwise you might kill users
+		[ -n "${repo_list:+x}" ] || continue
+		# local repo_name="${1:?must has first parameter}"
+		// debug_filter -- printf '%s %s\n' '$repo_name' "'$repo_name'"
+		local ifs="$IFS"
+		IFS="$newline"
+		local item
+		# for item in $(ps -ef | grep "$1" | grep -v "grep" | awk "{print \$1}" | tr -d ' '); do
+		# for item in $(ps -ef | grep "$repo_name" | grep -v "grep" | grep -v "$0"); do
+		# | grep -v "grep" was removed -- sometime repo_name might has it
+		# | grep -v "$$" was removed -- ps always generate new $$ process
+		for item in $(ps -ef | grep "$repo_name"); do
+			local pid="$(awk "{print \$1}" <(printf '%s\n' "$item") | tr -d ' ')"
+			[ -n "${pid:+x}" ] || continue
+			item="${item##*"${pid} "}"
+			// debug_filter -- printf '%s %s %s\n' "'$pid'" "'$item'" "candidate"
+			# Filtering process name(do not kill other tasks)
+			local process="$(awk "{print \$3}" <(printf '%s\n' "$item"))"
+			{ [ -n "${process:+x}" ] &&
+			[ -z "${process##*"kiss"*}" ]; } ||
+			(IFS="$newline" && list_contains "$process" "$@") || continue
+			[ "$process" != "grep" ] || { // debug_filter -- printf '%s %s\n' 'Ignored: $item' "$item"; continue; }
+			[ "$process" != "$self_name" ] || {
+				// debug '$process' "'$process' ignored"
+				kill_tree "$pid" true > /dev/null 2>&1
+				continue
+			}
+			/ '! equ "$pid" "$SESSION_PID"' || { // debug_filter -- printf '%s %s\n' 'Ignored: $item' "$item"; continue; }
+			// debug '$item' "$item"
+			// debug '$process' "$process"
+			# Filtering user name?
+			! equ "$pid" "$$" || continue
+			// debug_filter -- printf '%s %s %s and %s\n' "'$pid'" '$process' "$process [matched]" "selected"
+			exec 3>&2
+			exec 2> /dev/null
+			! pid_alive "$pid" || {
+				local user="$(awk "{print \$1}" <(printf '%s\n' "$item") | tr -d ' ')"
+				if [ "$user" == "$LOGNAME" ]; then
+					kill -TERM "$pid" | grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+					// debug_filter -- printf '%s %s\n' 'kill -TERM' "'$pid' '$item' fialed"
+					# fg
+				else
+					// as_usr "root" kill -KILL "$pid" | grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+					// debug_filter -- printf '%s %s\n' 'kill -9' "'$pid' '$item' fialed"
+					# fg
+				fi
+			}
+			exec 2>&3
+			exec 3>&-
+			! pid_alive "$pid" ||
+			contains "$wreckages" "$pid" ||
+			wreckages="${wreckages:+"${wreckages} "}$pid"
+		done
+		# printf '%s\n' 'Residues'
+		# ps -ef | grep "$repo_name" | grep -v "grep" | grep -v "$0"
+
+		# local item
+		# for item in $(ps -ef | grep "$repo_name" | grep -v "grep"); do
+		#     local pid="$(awk "{print \$1}" <(printf '%s\n' "$item") | tr -d ' ')"
+		#     ! contains "$wreckages" "$pid" || continue
+		#     item="${item##*"${pid} "}"
+		#     // debug_filter -- printf '%s %s %s\n' "'$pid'" "'$item'" "candidate"
+		#     local process="$(awk "{print \$3}" <(printf '%s\n' "$item"))"
+		#     [ -n "${process:+x}" ] || continue
+		#     [ -z "${process##*"kiss"*}" ] || continue
+		#     ! equ "$pid" "$$" || continue
+		#     // debug_filter -- printf '%s %s %s and %s\n' "'$pid'" '$process' "$process [matched]" "selected"
+		#     contains "$residues" "$pid" ||
+		#     residues="${residues:+"${residues} "}$pid"
+		# done
+
+		IFS="$ifs"
+		# ps -ef | grep -v grep | grep "$repo_name" | grep -v "$0" | awk "{print \$1}" | xargs doas kill -9
+	done
+	// debug_filter -- printf '%s %s\n' '$residues' "$residues"
+	// debug_filter -- printf '%s %s\n' '$wreckages' "$wreckages"
+	# kiss tends to initiate multiple instances in one session
+
+	# local pid=
+	# for pid in $wreckages $residues; do
+	#     # // debug_filter -- printf '%s\n' "'$item'"
+	#     local item="$(// delegate -- pid_args "$pid")"
+	#     item="${item##*"${pid} "}"
+	#     // debug_filter -- printf '%s %s %s\n' "'$pid'" "'$item'" "candidate"
+	#     ! pid_alive "$pid" || {
+	#         // debug_filter -- printf '%s %-8s %s in %s\n' '$pid' "'$pid'" "killed" "'$item'"
+	#         # // debug_filter -- printf '%s %s\n' "$pid" "will be forcibly killed"
+	#         # sleep 5 && (// as_usr "root" kill -9 "$pid" || printf '%s %s\n' 'kill -9' "'$item' fialed") > /dev/null 2>&1 &
+	#         sleep 0.5 && (
+	#             exec 3>&2
+	#             exec 2> /dev/null
+	#             ! pid_alive "$pid" ||
+	#             // as_usr "root" kill -9 "$pid" | grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+	#             // debug_filter -- printf '%s %s\n' 'kill -9' "'$pid' '$item' fialed"
+	#             # recursively calling
+	#             # wait "$pid" 2>/dev/null
+	#             exec 2>&3
+	#             exec 3>&-
+	#         ) > /dev/null 2>&1 &
+	#     }
+	# done
+
+	for repo_name do
+		local repo_list="$(// as_own "$REPO_ROOT/" \
+			find -L "$REPO_ROOT/" \( -type d -o -type l \) -name "${repo_name}")"
+		# Otherwise you might kill users
+		[ -n "${repo_list:+x}" ] || continue
+		local pid
+		# ps -ef | grep -v grep | grep "$repo_name" | awk '{print $1}' | tr -d ' ' | grep -v $$ | xargs doas kill -9
+		# for pid in $(ps -ef | grep -v grep | grep "$repo_name" | awk '{print $1}' | tr -d ' ' | grep -v $$); do
+		for pid in $(ps -ef | grep "$repo_name" | awk '{print $1}' | tr -d ' '); do
+			[ -n "${pid:+x}" ] || continue
+			// debug_filter -- printf '%s %s\n' '$repo_name' "'$repo_name'"
+			local item="$(// delegate -- pid_args "$pid")"
+			local process="$(awk "{print \$3}" <(printf '%s\n' "$item"))"
+			[ -n "${process:+x}" ] &&
+			[ -z "${process##*"kiss"*}" ] || continue
+			[ "$process" != "grep" ] || {
+				// debug_filter -- printf '%s %s\n' 'Ignored: $item' "$item"; continue; }
+
+			/ '! equ "$pid" "$SESSION_PID"' || {
+				// debug_filter -- printf '%s %s\n' 'Ignored: $item' "$item"; continue; }
+			// debug '$item' "$item"
+			// debug '$process' "$process"
+			exec 3>&2
+			exec 2> /dev/null
+			! pid_alive "$pid" || {
+				local user="$(awk "{print \$1}" <(printf '%s\n' "$repo_name") | tr -d ' ')"
+				if [ "$user" == "$LOGNAME" ]; then
+					kill -TERM "$pid" | grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+					// debug_filter -- printf '%s %s\n' 'kill -TERM' "'$pid' '$repo_name' fialed"
+					# fg
+				else
+					// as_usr "root" kill -KILL "$pid" | grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+					// debug_filter -- printf '%s %s\n' 'kill -9' "'$pid' '$repo_name' fialed"
+					# fg
+				fi
+			}
+			exec 2>&3
+			exec 3>&-
+
+		done
+	done
+
+	# Don't need to do this
+	# kill_tree "$$" true
+
+	# trap - EXIT
+	# exit
+}
+
+# kill_jobs() {
+kill_all() {
+
+	_level_2
+
+	// log '$$ : $0' "$(delegate -- format "$$") : $0"
+	// / 'log $SESSION_PID "$SESSION_PID"'
+	# [ -z "${USE_SAY_PIPE+x}" ] ||
+	[ -z "${PID_SAY:+x}" ] || // log '$PID_SAY' "$PID_SAY"
+	[ -z "${PID_LOG:+x}" ] || // log '$PID_LOG' "$PID_LOG"
+
+	// debug_filter -- printf '%s %s\n' '$scope' "$scope"
+
+	local ifs="$IFS"
+	local IFS="$newline"
+	local item=
+	local item_list=
+	local repo_name=
+
+	# for repo_name do
+	#     # // debug_filter -- printf '%s %s\n' '$repo_name' "$repo_name"
+	#     item_list="${item_list:+"${item_list}${newline}"}$(ps -ef | \
+	#         grep "$repo_name" | grep -v "$$" | grep -v "${SESSION_PID:-"$$"}" | \
+	#         grep -v "${PID_SAY:-"$$"}" | grep -v "${PID_LOG:-"$$"}")"
+	#     # grep -v grep will break the query here
+	#     # grep -v grep | grep -v "$$" | grep -v "${SESSION_PID:-"$$"}" | \
+	#     # grep "$repo_name" | awk "{print \$1}" | tr -d ' ')"
+	# done
+
+	for repo_name do
+		// debug_filter -- printf '%s %s\n' '$repo_name' "$repo_name"
+		for item in $(/ 'ps -ef | \
+					grep -v grep | \
+					grep -v "$$" | \
+					grep -v "${SESSION_PID:-"$$"}" | \
+					grep -v "${PID_SAY:-"$$"}" | \
+					grep -v "${PID_LOG:-"$$"}" | \
+					grep "$repo_name"'); do
+			# grep "$repo_name" | awk "{print \$1}" | tr -d ' ')"
+			(IFS="$newline" && list_contains "$item" $item_list) ||
+			item_list="${item_list:+"${item_list}${newline}"}$item"
+		done
+	done
+
+	// debug_filter -- printf '\n%s\n%s\n' '$item_list' "$item_list"
+	local protected_list=
+	local job_list=
+	local pid=
+	// debug_filter -- printf '\n%s\n%s\n' '$*' "$*"
+	// debug_filter -- printf '\n%s\n' 'protected items >v<'
+	for item in $item_list; do
+		# item="$(// delegate -- pid_args "$pid")"
+		pid="$(printf '%s\n' "$item" | awk "{print \$1}" | tr -d ' ')"
+		process="$(printf '%s' "$item" | awk "{print \$4}")"
+		{ [ -n "${process:+x}" ] &&
+		[ -z "${process##*"kiss"*}" ]; } ||
+		(IFS="$newline" && list_contains "$process" "$@") || {
+			// debug_filter -- printf '%s\n' ">v< $item"
+			protected_list="${protected_list:+"${protected_list}${newline}"}$pid"
+			continue
+		}
+		! pid_alive "$pid" ||
+		(IFS="$newline" && list_contains "$pid" $job_list) || {
+			// debug_filter -- printf '%s\n' "    $item"
+			job_list="${job_list:+"${job_list}${newline}"}$pid"
+		}
+	done
+
+	IFS="$ifs"
+
+	// debug_filter -- printf '\n%s\n%s\n' '$job_list' "$job_list"
+	// debug_filter -- printf '\n%s\n%s\n' '$protected_list' "$protected_list"
+	# local job_list="$1"
+	# local protected_list="$2"
+
+	# // log '$PID_SAY' "$PID_SAY"
+	# // log '$PID_LOG' "$PID_LOG"
+
+	# [ -n "$1" ] || { echo "Provide a name of process, please"; exit 1; }
+	# ifs="$IFS"
+	# IFS="$newline"
+	# # for repo_name in $(ps -ef | grep "$1" | grep -v "grep" | awk "{print \$1}" | tr -d ' '); do
+	# for repo_name in $(ps -ef | grep "$1" | grep -v "grep" | grep -v "$0"); do
+	#     # printf '%s %s\n' "$1" "'$repo_name' found"
+	#     printf '%s %s\t' "'$repo_name'" "found"
+	#     pid="$(awk "{print \$1}" <(printf '%s\n' "$repo_name") | tr -d ' ')"
+	#     printf '%s %s\n' '$pid' "'$pid'"
+	#     // as_usr "root" kill -9 "$pid" || printf '%s %s\n' 'kill -9' "'$repo_name' fialed"
+	# done
+	# IFS="$ifs"
+	# printf '%s\n' 'Residues'
+	# ps -ef | grep "$1" | grep -v "grep" | grep -v "$0"
+	# # ps -ef | grep -v grep | grep "$1" | grep -v "$0" | awk "{print \$1}" | xargs doas kill -9
+	#
+	# # ps -ef | grep "$1" | grep -v grep | cut -f 1 -d ' '  | doas xargs kill -9
+	# # ps -ef | grep "$1" | grep -v grep | cut -f 2 -d ' '  | doas xargs kill -9
+
+	# printf '%s %s\n' '$0' "$0"
+	# // log '$0' "$0"
+	# printf '%s\n' "ps -ef | grep \"$0\""
+	# ps -ef | grep "$0"
+	// debug '$(ps -ef | grep \"$0\")' "$(ps -ef | grep \"$0\")"
+	# printf '%s %s\n' '$$' "$$"
+	# // log '$$' "$$"
+	# printf '%s\n' "ps -ef | grep \"$$\""
+	# ps -ef | grep "$$"
+	// debug '$(ps -ef | grep \"$$\")' "$(ps -ef | grep \"$$\")"
+	# // pipe_cancel "PID_SAY"
+	# // pipe_cancel "PID_LOG"
+	# : "${lineno="$((LINENO + 2))"}"
+	# : "${lineno_scope="$lineno"}"
+	local self_name="{${0##*/}}"
+	// log '$self_name' "$self_name"
+	# [ "{kiss-kill}" == "$self_name" ] || // die '$self_name' "$self_name"
+	# local repo_name
+
+	ifs="$IFS"
+	IFS="$newline"
+
+	# for repo_name in $@; do
+	#     // log '$repo_name' "$repo_name"
+	#     # grep -v $$ never usefull
+	#     # printf '%s\n' "ps -ef | grep -v \$$ | grep \"$repo_name\""
+	#     # ps -ef | grep -v $$ | grep "$repo_name"
+	#     // debug '$(ps -ef | grep -v $$ | grep "$repo_name")' \
+	#         "$(ps -ef | grep -v $$ | grep "$repo_name")"
+	#     # printf '%s\n' "ps -ef | grep -v \"\$$\" | grep \"$repo_name\""
+	#     # ps -ef | grep -v "$$" | grep "$repo_name"
+	#     // debug '$(ps -ef | grep -v "$$" | grep "$repo_name")' \
+	#         "$(ps -ef | grep -v "$$" | grep "$repo_name")"
+	#     # printf '%s\n' "ps -ef | grep \"$repo_name\""
+	#     # ps -ef | grep "$repo_name"
+	#     // debug '$(ps -ef | grep "$repo_name")' "$(ps -ef | grep "$repo_name")"
+	#     # ps -ef | grep -v grep | grep -v $$ | grep "$repo_name" | awk "{print \$1}" | tr -d ' ' | xargs doas kill -9
+	#     # job_list="$(ps -ef | grep -v grep | grep -v "$$" | grep -v "$SESSION_PID" | \
+	#     #         grep "$repo_name" | awk "{print \$1}" | tr -d ' ')"
+	local pid=
+	for pid in $job_list; do
+		local item="$(// delegate -- pid_args "$pid")"
+		# for item in $(ps -ef | grep "$repo_name"); do
+
+		# // log '$item' "$item"
+		# // log '$job_list' "$job_list"
+
+		local process="$(printf '%s' "$item" | awk "{print \$3}")"
+		[ "$process" != "grep" ] || {
+			# printf '%s %s\n' 'Ignored: $item' "$item"
+			// debug '$item' "'$item' ignored"
+			continue
+		}
+		# pid="$(echo "$item" | awk "{print \$1}" | tr -d ' ')"
+		// log '$pid : $process' "$(delegate -- \
+				format "$pid") : $process as a candidate"
+
+		! equ "$pid" "$$" || {
+			# printf '%s %s\n' 'Ignored: $item' "$item"
+			// cue '$process' \
+				"$(delegate -- format "$pid") is being waited for \$$"
+			# // debug '$item' "'$item' ignored"
+			continue
+		}
+		/ '! equ "$pid" "$SESSION_PID"' || {
+			# printf '%s %s\n' 'Ignored: $item' "$item"
+			// 'cue $process \
+				"$(delegate -- format "$pid") is being waited for $SESSION_PID"'
+			# // debug '$item' "'$item' ignored"
+			continue
+		}
+		! equ "$process" "$self_name" || {
+
+			# local parent_id="$(delegate -- pid_parent "$pid")"
+			# // war '$parent_id : $item' "$(delegate -- format "$parent_id") : $item"
+			# pstree -p "$pid"
+			# equ "$parent_id" "1" &&
+			(IFS="$newline" && list_contains "$pid" $job_list) || {
+				// war '$item' "'$item' ignored"
+				# ! equ "$pid" "$PID_SAY" || war '$pid : PID_SAY' "$(delegate -- format "$pid") : PID_SAY"
+				# ! equ "$pid" "$PID_LOG" || war '$pid : PID_LOG' "$(delegate -- format "$pid") : PID_LOG"
+
+				# // log '$pid : $process' \
+				#     "$(delegate -- format "$pid") : $process is being cleaned up"
+				# # kill_tree "$pid" true
+				# // kill_subtree  "$pid"
+				# ! pid_alive "$pid" || {
+				#     // as_usr "root" kill -KILL "$pid"
+				#     # fg
+				# }
+
+				# [ "{kiss-kill}" == "$process" ] || // die '$process' "$process"
+				continue
+			}
+		}
+		# (IFS="$newline" && list_contains "$pid" $job_list) || continue
+		# printf '%s %s\n' 'To be killed: $pid $process' "$pid $process"
+		# Using "log" at this moment will generate a dangling process!!!
+		// log '$pid' "$(delegate -- format "$pid") is being cleaned up [*]"
+		# // log '$pid' "$(delegate -- format "$pid") is being cleaned up [*]"
+		! pid_alive "$pid" || {
+			exec 3>&2
+			exec 2> /dev/null
+			# // kill_tree "$pid" true
+			# // kill_subtree  "$pid"
+			// as_usr "root" kill -KILL "$pid"
+			# job_list="${job_list:+"${job_list} "}$!"
+			# // as_usr "root" fg
+			exec 2>&3
+			exec 3>&-
+		}
+	done
+	# done
+	# for repo_name in $@; do
+	#     // log '$repo_name' "$repo_name"
+	#     for item in $(ps -ef | grep "$repo_name"); do
+	#         // log '$item' "$item"
+	#         local process="$(printf '%s' "$item" | awk "{print \$4}")"
+	#         [ -n "${process:+x}" ] &&
+	#         [ -z "${process##*"kiss"*}" ] || continue
+	#         [ "$process" != "grep" ] || {
+	#             # printf '%s %s\n' 'Ignored: $item' "$item"
+	#             // debug '$item' "'$item' ignored"
+	#             continue
+	#         }
+	#         pid="$(echo "$item" | awk "{print \$1}" | tr -d ' ')"
+	#         // log '$pid : $process' "$(delegate -- format "$pid") : $process as a candidate [2nd round]"
+
+	#         ! equ "$pid" "$$" || {
+	#             # printf '%s %s\n' 'Ignored: $item' "$item"
+	#             // log '$pid : $process' \
+	#                 "$(delegate -- format "$pid") : '$process' is being waited for \$$"
+	#             # // debug '$item' "'$item' ignored"
+	#             continue
+	#         }
+	#         ! equ "$pid" "$SESSION_PID" || {
+	#             # printf '%s %s\n' 'Ignored: $item' "$item"
+	#             // log '$pid : $process' \
+	#                 "$(delegate -- format "$pid") : '$process' is being waited for \$SESSION_PID"
+	#             # // debug '$item' "'$item' ignored"
+	#             continue
+	#         }
+
+	#         # printf '%s %s\n' 'To be killed: $pid $process' "$pid $process"
+	#         // log '$pid' "$(delegate -- format "$pid") is being cleaned up"
+	#         exec 4>&2
+	#         exec 2> /dev/null
+	#         ! pid_alive "$pid" || { // as_usr "root" kill -KILL "$pid"; }
+	#         exec 2>&4
+	#         exec 4>&-
+	#     done
+	# done
+	item=
+	item_list=
+	for repo_name do
+		// debug_filter -- printf '%s %s\n' '$repo_name' "$repo_name"
+		for item in $(/ 'ps -ef | \
+					grep -v grep | \
+					grep -v "$$" | \
+					grep -v "${SESSION_PID:-"$$"}" | \
+					grep -v "${PID_SAY:-"$$"}" | \
+					grep -v "${PID_LOG:-"$$"}" | \
+					grep "$repo_name"'); do
+			# grep "$repo_name" | awk "{print \$1}" | tr -d ' ')"
+			(IFS="$newline" && list_contains "$item" $item_list) ||
+			item_list="${item_list:+"${item_list}${newline}"}$item"
+		done
+	done
+	// debug_filter -- printf '\n%s\n%s\n' '$item_list' "$item_list"
+	local last_list=
+	item=
+	pid=
+	for item in $item_list; do
+
+		pid="$(printf '%s\n' "$item" | awk "{print \$1}" | tr -d ' ')"
+		# for item in $protected_list; do
+		# equ "$pid" "$item" && continue ||
+		(IFS="$newline" && list_contains "$pid" $protected_list) ||
+		(IFS="$newline" && list_contains "$pid" $last_list) ||
+		last_list="${last_list:+"${last_list}${newline}"}$pid"
+		# done
+	done
+	// debug_filter -- printf '\n%s\n%s\n' '$last_list' "$last_list"
+
+	[ -z "${KISS_INNER_PIPE+x}" ] || // war 'should' "not see this"
+	[ ! -z "${KISS_INNER_PIPE+x}" ] || { // log 'kill_all' "done"; return 0; }
+
+	local self_list=
+	# self_list="$(pgrep -x "${0}" || // war 'pgrep -x' "failed"; printf '\n')" || :
+	self_list="$(ps -eo pid,user,args | grep -v grep | grep "{${0##*/}}")"
+	// debug_filter -- printf '\n%s\n%s\n' '$self_list' "$self_list"
+	local final_list=
+
+	for pid in $self_list; do
+		! (IFS="$newline" && list_contains "$pid" $last_list) ||
+		(IFS="$newline" && list_contains "$pid" $final_list) ||
+		final_list="${final_list:+"${final_list}${newline}"}$pid"
+	done
+	// debug_filter -- printf '\n%s\n%s\n' '$final_list' "$final_list"
+	for pid in $final_list; do
+		# Using "log" at this moment will generate a dangling process!!!
+		// log '$pid' "$(delegate -- format "$pid") is being cleaned up [*]"
+		! pid_alive "$pid" || {
+			exec 3>&2
+			exec 2> /dev/null
+			# // kill_tree "$pid" true
+			# // kill_subtree  "$pid"
+			// as_usr "root" kill -KILL "$pid"
+			# job_list="${job_list:+"${job_list} "}$!"
+			# // as_usr "root" fg
+			exec 2>&3
+			exec 3>&-
+		}
+	done
+	# self_list="$(pgrep -x "${0}" || // war 'pgrep -x' "failed"; printf '\n')" || :
+	self_list="$(ps -eo pid,user,args | grep -v grep | grep "{${0##*/}}")"
+
+	// debug_filter -- printf '\n%s\n%s\n' '$self_list' "$self_list"
+	IFS="$ifs"
+
+	# exec 3>&2
+	# exec 2> /dev/null
+	# ! pid_alive "$SESSION_PID" || // as_usr "root" kill -KILL -"$SESSION_PID"
+	# exec 2>&3
+	# exec 3>&-
+	// prompt "kill_all finished"
+}
 
 # trap 'exit' INT TERM QUIT
 # trap 'stty intr ; exit' INT TERM QUIT
@@ -10,17 +534,20 @@
 # trap " \
 # // kill_name \"\" $*; \
 # " USR1
-set -- "" "$@"
+
+# For kill_name auto executing from trap
+# set -- "" "$@"
+
 unset KILL_LIST
 USE_PIPE_ID=
-# Items will be removed the protection from protected_list
+
+# Items will be removed from the protection of protected_list
 : "${KILL_LIST:="{kiss} {kiss-impl} {kiss-pipe} {${0##*/}} tee {subshell-on-bui} $*"}" && export KILL_LIST
-# [ -n "${HEADER+x}" ] ||
-# shellcheck source=/usr/include/kiss-share
-. /usr/include/kiss-share > /dev/null 2>&1
+
 [ -z "${KISS_DEBUG+x}" ] || printf '%s %s\n' '$KILL_LIST' "$KILL_LIST"
-// log '' ""
-// log '$@' "$(esceval "$@")"
+# // log '' ""
+# // log '$@' "$(esceval "$@")"
+
 # trap " \
 # // war 'EXIT' \"triggered in \\\"\$func_name\\\"\"; \
 # // pipe_cancel \"PID_LOG\"; \
@@ -29,8 +556,10 @@ USE_PIPE_ID=
 # " EXIT
 # listen
 # // debug_filter -- \
+
 [ -z "${KISS_DEBUG+x}" ] || trap
 
+# Test it with a command does not exit
 # iii
 
 # item_list=
@@ -50,7 +579,7 @@ USE_PIPE_ID=
 # job_list=
 # pid=
 # ifs="$IFS"
-# IFS=$'\n'
+# IFS="$newline"
 # printf '%s\n' 'protected items'
 # for item in $item_list; do
 #     # item="$(// delegate -- pid_args "$pid")"
@@ -76,7 +605,7 @@ USE_PIPE_ID=
 # // pipe_cancel "PID_LOG"
 # // pipe_cancel "PID_SAY"
 
-# // kill_all "$@"
+// kill_all "$@" $KILL_LIST
 # // kill_jobs "$job_list" "$protected_list"
 
-# kill 0
+kill 0

@@ -16,6 +16,7 @@ case $1 in
     ;;
 esac
 
+[ -L "$PWD/${1##*/}" ] ||
 [ -f "$PWD/${1##*/}" ] || {
     printf 'usage: kiss-owns [/path/to/file]\n' >&2
     exit 1
@@ -24,7 +25,7 @@ esac
 # Print the full path to the manifest file which contains
 # the match to our search.
 pkg_owns=$(grep -lFx \
-    "$PWD/${1##*/}" \
+    "${1}" \
     "$KISS_ROOT/var/db/kiss/installed/"*/manifest)
 
 

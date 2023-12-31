@@ -1,0 +1,4 @@
+#! /bin/sh -e
+# Strace kiss itself
+unset KISS_AS_LIBRARY
+strace -f -eexecve /usr/bin/kiss "$@"

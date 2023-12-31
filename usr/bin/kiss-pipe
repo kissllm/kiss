@@ -273,7 +273,7 @@ rm -f -- \"$pipe\"; \
 					wait $pid
 
 					# Some special charaters to get status
-					[ -n "${content##*"$(printf '%b' '$FS')"*}" ] || {
+					[ -n "${content##*"$(printf '%b' "$FS")"*}" ] || {
 						# printf '%s\n' "$content" > /dev/stderr
 						# printf '%s\n' "$content" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' \
 						#     >> "$INIT_OUTPUT" 2>&1
@@ -290,7 +290,7 @@ rm -f -- \"$pipe\"; \
 						# exit
 					}
 
-					[ -n "${content##*"[$(printf '%b' 'EOF')]"*}" ] || {
+					[ -n "${content##*"[$(printf '%b' EOF)]"*}" ] || {
 						# printf '%s\n' "$content" > /dev/stderr
 						printf '%s\n' "$content" | sed $'s,\x1b\\[[0-9;]*[a-zA-Z],,g' \
 							>> "$INIT_OUTPUT" 2>&1

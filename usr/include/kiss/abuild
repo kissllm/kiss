@@ -17,8 +17,8 @@ check_pipefail="$(set -o | grep pipefail | awk "{print \$1}")"
 
 interrupt_type="$(type "interrupt" 2> /dev/null)" || :
 {
-	[ ! -z "${interrupt_type:+x}" ] &&
-	[ -z "${interrupt_type##*"alias"*}" ]
+	[ ! -z "${interrupt_type:+x}" ] # &&
+	# [ -z "${interrupt_type##*"function"*}" ]
 	# set | grep -q _level > /dev/null &&
 	# [ -n "${HEADER+x}" ]
 } || {
@@ -39,32 +39,41 @@ interrupt_type="$(type "interrupt" 2> /dev/null)" || :
 
 // log 'Inside' "kiss-abuild"
 
+SCRIPT_NAME="kiss-abuild" && export SCRIPT_NAME
+
+[ -z "${IS_KISS+x}" ] || / "$error_trap"
+
 # [ -z "${PKG_DIR:+x}" ] || [ -z "${PKG_VER:+x}" ] ||
 # set -- "$PKG_DIR" "$PKG_VER"
 
-pkgdir="$1"
+pkgdir="$1" && export pkgdir
 // log '$pkgdir' "$pkgdir"
 
-srcdir="$PWD"
+srcdir="$PWD" && export srcdir
 // log '$srcdir' "$srcdir"
-builddir="$PWD"
+# builddir="$PWD" && export builddir
+builddir="$OBJ_ROOT/${PWD##*/}" && export builddir
 // log '$builddir' "$builddir"
 
 # For fakeroot and language packs? (search subpkgdir= in abuild.in)
-subpkgdir="$pkgdir"
+subpkgdir="$pkgdir" && export subpkgdir
 // log '$subpkgdir' "$subpkgdir"
 
 abuild_test="133"
 
+jobs=$(($(nproc) + 1))
+MAKEOPTS="-j$jobs" && export MAKEOPTS
+JOBS="$jobs" && export JOBS
+
 msg() {
 	# printf '%s\n' "$1"
-	// log '' "$1"
+	// log 'abuild : $1' "$1"
 }
 
 amove() {
-	[ -n "$pkgdir" ] || return 1
-	[ -n "$subpkgdir" ] || return 1
-	[ "$subpkgdir" != "$pkgdir" ] || return 1
+	[ -n "$pkgdir" ] || return 0
+	[ -n "$subpkgdir" ] || return 0
+	[ "$subpkgdir" != "$pkgdir" ] || return 0
 
 	# store directory
 	d="$(pwd -L)"
@@ -91,40 +100,40 @@ amove() {
 }
 
 # grep default /working/os/abuild/*.in
-# abuild/abuild-keygen.in:	  local emailaddr default_name
+# abuild/abuild-keygen.in:    local emailaddr default_name
 # "local" can not be use globally
 # local emailaddr default_name
 # git config -l | grep user.name | awk -F "=" "{print \$2}"
 
 emailaddr="$(git config -l | grep user.email | awk -F "=" "{print \$2}")"
-: "${USER:="$(whoami)"}"
+: "${USER:="$(whoami)"}" && export USER
 [ -z "${emailaddr:+x}" ] || emailaddr="$USER@mail.com"
-
-# abuild/abuild-keygen.in:	  default_name="${emailaddr:-$USER}-$(printf "%x" $(date +%s))"
+export emailaddr
+# abuild/abuild-keygen.in:    default_name="${emailaddr:-$USER}-$(printf "%x" $(date +%s))"
 # default_name="${emailaddr:-$USER}-$(printf "%x" $(date +%s))"
 # git config -l | grep user.name | awk -F "=" "{print \$2}"
 
 default_name="$(git config -l | grep user.name | awk -F "=" "{print \$2}")"
 [ -z "${default_name:+x}" ] || default_name="$USER"
-
-# abuild/abuild-keygen.in:	  privkey="$ABUILD_USERDIR/$default_name.rsa"
+export default_name
+# abuild/abuild-keygen.in:    privkey="$ABUILD_USERDIR/$default_name.rsa"
 export ABUILD_USERDIR="$USER"
 privkey="$ABUILD_USERDIR/$default_name.rsa"
-
-# abuild/abuild-keygen.in:				-n					 Non-interactive. Use defaults
-# abuild/abuild-keygen.in:			  elevate privileges, if it is not set it defaults to doas or sudo if doas
+export privkey
+# abuild/abuild-keygen.in:              -n                   Non-interactive. Use defaults
+# abuild/abuild-keygen.in:            elevate privileges, if it is not set it defaults to doas or sudo if doas
 # abuild/abuild.in:# defaults
 # abuild/abuild.in:# we override the default msg, warning and error as we want the pkgname
 # abuild/abuild.in:default_cleanup_srcdir() {
 default_cleanup_srcdir() { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_sanitycheck() {
-default_sanitycheck()	 { // log "$FUNCNAME" "passed"; }
+default_sanitycheck()    { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_fetch() {
-default_fetch()			 { // log "$FUNCNAME" "passed"; }
+default_fetch()          { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_unpack() {
-default_unpack()		 { // log "$FUNCNAME" "passed"; }
+default_unpack()         { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_prepare() {
-default_prepare()		 {
+default_prepare()        {
 	for item in *.patch; do
 		// log 'patching' "$item"
 		patch -p1 < "$item" || // die "$item" "patching failed"
@@ -132,13 +141,13 @@ default_prepare()		 {
 	// log "$FUNCNAME" "passed"
 }
 # abuild/abuild.in:default_lang() {
-default_lang()			 { // log "$FUNCNAME" "passed"; }
+default_lang()           { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_lang_subpkg() {
-default_lang_subpkg()	 { // log "$FUNCNAME" "passed"; }
+default_lang_subpkg()    { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_check() {
-default_check()			 { // log "$FUNCNAME" "passed"; }
+default_check()          { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_doc() {
-default_doc()			 {
+default_doc()            {
 	local gzip=$(command -v pigz || echo gzip)
 	# depends="$depends_doc"
 	pkgdesc="$pkgdesc (documentation)"
@@ -192,30 +201,30 @@ default_doc()			 {
 	// log "$FUNCNAME" "passed"
 }
 # abuild/abuild.in:default_dbg() {
-default_dbg()			 { // log "$FUNCNAME" "passed"; }
+default_dbg()            { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_dev() {
-default_dev()			 { // log "$FUNCNAME" "passed"; }
+default_dev()            { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_static() {
-default_static()		 { // log "$FUNCNAME" "passed"; }
+default_static()         { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_libs() {
-default_libs()			 { // log "$FUNCNAME" "passed"; }
+default_libs()           { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_openrc() {
-default_openrc()		 { // log "$FUNCNAME" "passed"; }
+default_openrc()         { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_bashcomp() {
-default_bashcomp()		 { // log "$FUNCNAME" "passed"; }
+default_bashcomp()       { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_zshcomp() {
-default_zshcomp()		 { // log "$FUNCNAME" "passed"; }
+default_zshcomp()        { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_fishcomp() {
-default_fishcomp()		 { // log "$FUNCNAME" "passed"; }
+default_fishcomp()       { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:# Base version defaults to 0 except if specified by $verbase.
-# abuild/abuild.in:			   -D  Set APKINDEX description (default: \$repo \$(git describe))
-# abuild/apkbuild-cpan.in:	  default {
-# abuild/apkbuild-pypi.in:	  } default {
+# abuild/abuild.in:            -D  Set APKINDEX description (default: \$repo \$(git describe))
+# abuild/apkbuild-cpan.in:    default {
+# abuild/apkbuild-pypi.in:    } default {
 # abuild/buildlab.in:default_colors() {
-default_colors()		 { // log "$FUNCNAME" "passed"; }
+default_colors()         { // log "$FUNCNAME" "passed"; }
 # abuild/buildlab.in:default_colors
-# abuild/buildlab.in:		  'c') default_colors
-# abuild/newapkbuild.in:	  default_prepare
+# abuild/buildlab.in:         'c') default_colors
+# abuild/newapkbuild.in:      default_prepare
 
 # sh: set ts=4 sw=4 tw=0 et :
 
