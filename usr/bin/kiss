@@ -2364,6 +2364,7 @@ pick_up() {
 		#     fi
 		# }
 		# done
+		// cue 'install' "$explicit"
 		# // subshell_all "install" "$@" 2>&1 ||
 		// alter "install" $explicit 2>&1 ||
 		// die '$@' "'$explicit' install failed"
@@ -9459,9 +9460,9 @@ args() {
 	#         │          │
 	#  non $explicit $explicit
 
-	// debug_filter -- // log '$explicit' "$(esceval $explicit)"
-	// debug_filter -- // log '$makedeps' "$(esceval $makedeps)"
-	// debug_filter -- // log '$deps'     "$(esceval $deps)"
+	// log '$explicit' "$(esceval $explicit)"
+	// log '$makedeps' "$(esceval $makedeps)"
+	// log '$deps'     "$(esceval $deps)"
 
 	# Rerun the script as root with a fixed environment if needed. We sadly
 	# can't run singular functions as root so this is needed.
@@ -9542,8 +9543,25 @@ args() {
 		h|help-ext)
 			// pkg_help_ext "$@" ;;
 		i|install)
-			# for repo_urn do // pkg_install "$repo_urn"; done ;;
-			// alter "install" "$@" 2>&1 || :
+			for repo_urn do
+				local repo_name="${repo_urn##*/}"
+				(! list_contains "$repo_urn" $makedeps) || {
+					is_repos "$sys_db/$repo_name" && # ||
+					# is_model "$repo_urn" "$sys_db/${repo_urn##*/}" "mirror"
+					continue || {
+						(export KISS_FORCE=; // alter "install" "$repo_urn" 2>&1 || :)
+						continue
+					}
+				}
+				local target_repo="$KISS_ROOT/$db/$repo_name"
+				is_repos "$target_repo" && {
+					[ -z "${repo_urn##*"$KISS_ROOT/$db"*}" ] ||
+					is_model "$repo_urn" "$target_repo" "mirror"
+				} &&
+					(! list_contains "$repo_urn" $explicit) ||
+				// alter "install" "$repo_urn" 2>&1 || :
+			done
+			# // alter "install" "$@" 2>&1 || :
 			;;
 		l|list)
 			for repo_urn do // list_version "$repo_urn"; done ;;
@@ -10182,10 +10200,14 @@ function_define() {
 }
 
 alter() {
+	_level_2
 	action="$1"; shift 1;
+	// log '$LOGNAME' "$LOGNAME"
+	// log '$@' "$(esceval "$@")"
 	[ "$(whoami)" = "root" ] && {
 		. /usr/bin/kiss-alter
-		// pre_args && subshell_all "$action" "$@" 2>&1
+		# // pre_args && subshell_all "$action" "$@" 2>&1
+		// subshell_all "$action" "$@" 2>&1
 		:
 	} || {
 
@@ -10223,9 +10245,8 @@ alter() {
 		operation_dir="$KISS_ROOT"
 		[ "$action" != "archive" ] || operation_dir="$REPO_ROOT_IMPL"
 
-		/ "// as_own \"$operation_dir/\" \
-			$ENV_VARIABLES \
-			/usr/bin/kiss \"$action\" \"$@\""
+		! // || / "as_own \"$operation_dir/\" env \
+			$ENV_VARIABLES /usr/bin/kiss \"$action\" \"$@\""
 
 		# // as_own "$KISS_ROOT/" \
 		#   KISS_ALTER_AS_LIBRARY="${KISS_ALTER_AS_LIBRARY-}" \
@@ -10265,7 +10286,7 @@ alter() {
 a() { alter "alternatives" "$@"; }
 r() { alter "remove" "$@"; }
 i() { alter "install" "$@"; }
-ar() { alter "archive" "$@"; }
+archive() { alter "archive" "$@"; }
 maint() { set -e; alter "maintain" "$@"; }
 # // function_define "alternatives" "a"
 # // function_define "i"            "i"

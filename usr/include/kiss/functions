@@ -130,7 +130,7 @@ append_path() {
 # PATH, MANPATH
 # Add to the end of a target path
 _path_append() {
-	[ ! -z "${1:+x}" ] && [ -d "$2" ] || return
+	[ ! -z "${1:+x}" ] && [ -d "$2" ] || return 0
 	local extend=":$(eval "echo \${${1}-}"):"
 	# echo "\$2 = $2"
 	# echo "test=${extend##*:$2:*}"
@@ -145,7 +145,7 @@ alias path_append='_path_append'
 
 # Add to the front of a target path
 _path_prepend() {
-	[ ! -z "${1:+x}" ] && [ -d "$2" ] || return
+	[ ! -z "${1:+x}" ] && [ -d "$2" ] || return 0
 	local extend=":$(eval "echo \${${1}-}"):"
 	# echo "\$2 = $2"
 	# echo "test=${extend##*:$2:*}"
@@ -222,7 +222,7 @@ delegate() {
 	# "$@" won't lose any empty arguments
 	# Version 3 -- \n as $RS
 	# newline_leading=$("$@") && {
-	line=$("$@") && {
+	line=$("$@" | tr -d "$newline") && {
 		# Version 4 -- using $RS as string
 		# local line="${newline_leading##*${newline}}"
 

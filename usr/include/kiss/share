@@ -2432,7 +2432,9 @@ see() {
 		-re "s|(~?).*(.{$LENGTH_LIMIT})|...\2|")"
 
 		# [ ! -z "${contents##\"*\"}" ] || contents="$(printf '%s' "$contents" | sed -r 's/^"|"$//g')"
-		[ -z "${contents##\'*\'}" ] || contents="'$contents'"
+		# [ -z "${contents##\'*\'}" ] ||
+		[ -z "${contents##*\'*\'*}" ] ||
+			contents="'$contents'"
 
 		result="$result$(printf '%s' "$contents")"
 		printf '%s' "$result"
@@ -2473,7 +2475,9 @@ see() {
 		item="$(printf '%s' "$item" | sed -re "s|(~?/[^/]*/).*(.{$LENGTH_SLASH})|\1...\2|" \
 			-re "s|(~?).*(.{$LENGTH_LIMIT})|...\2|")"
 
-		[ -z "${item##\'*\'}" ] || item="'$item'"
+		# [ -z "${item##\'*\'}" ] ||
+		[ -z "${item##*\'*\'*}" ] ||
+			item="'$item'"
 
 		# printf "%-${WIDTH_SCOPE}s%-${WIDTH_KEY}s%s %s\n" \
 		# "$scope/$func_name" '$length_applied' "$length_applied" "$item"
