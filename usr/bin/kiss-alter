@@ -26,9 +26,13 @@ SCRIPT_NAME="kiss-alter" && export SCRIPT_NAME
 : "${SESSION_PPID:="${PPID}"}" && export SESSION_PPID
 : "${KISS_PID:=$$}" && export KISS_PID
 : "${KISS_TMPDIR:="/tmp/$(whoami)/kiss"}" && export KISS_TMPDIR
-[ -d "$KISS_TMPDIR" ] || // as_own "$KISS_ROOT/" mkdir -p "$KISS_TMPDIR"
+[ -d "$KISS_TMPDIR" ] ||
+	# // as_own "$KISS_ROOT/" \mkdir -p "$KISS_TMPDIR"
+	\mkdir -p "$KISS_TMPDIR"
 log_dir="$KISS_TMPDIR/logs"
-[ -d "$log_dir" ] || // as_own "$KISS_ROOT/" mkdir -p "$log_dir"
+[ -d "$log_dir" ] ||
+	# // as_own "$KISS_ROOT/" mkdir -p "$log_dir"
+	\mkdir -p "$log_dir"
 : "${USER_OUTPUT:="$KISS_TMPDIR/logs/build.log"}" && export USER_OUTPUT
 
 # interrupt_type="$(type "interrupt" > /dev/null && type "interrupt")" || :
@@ -219,17 +223,17 @@ remove_files() {
 
 		# Remove empty directories.
 		elif [ -d "$_file" ]; then
-			as_own "$KISS_ROOT/" rmdir "$_file" 2>/dev/null || :
+			as_own "$KISS_ROOT/" \rmdir "$_file" 2>/dev/null || :
 
 		# Remove everything else.
 		else
-			as_own "$KISS_ROOT/" rm -f "$_file"
+			as_own "$KISS_ROOT/" \rm -f "$_file"
 		fi
 	done
 
 	# Remove all broken directory symlinks.
 	for sym do
-		[ -e "$sym" ] || as_own "$KISS_ROOT/" rm -f "$sym"
+		[ -e "$sym" ] || as_own "$KISS_ROOT/" \rm -f "$sym"
 	done
 }
 
@@ -245,7 +249,7 @@ install_files() {
 	// debug_filter -- // log '$@' "$(esceval "$@")"
 
 	local flag="$1"
-	local ext_dir="$2"
+	local extract_dir="$2"
 
 	set --
 	local kiss_root_user="$(// delegate owner "$KISS_ROOT/")"
@@ -261,7 +265,11 @@ install_files() {
 			# Skip directories if they already exist in the file system.
 			# (Think /usr/bin, /usr/lib, etc).
 			[ -d "$_file" ] || {
-				local oct="$(// delegate -- file_rwx "$ext_dir$file")"
+				# mkdir: can't create directory '/opt/kiss/usr/include/c++/v1/__string/': Not a directory
+				local try_file="${_file%/*}"
+				{ [ ! -f "$try_file" ] && [ ! -h "$try_file" ]; } ||
+					"$@" \rm -f "$try_file"
+				local oct="$(// delegate -- file_rwx "$extract_dir$file")"
 				"$@" \mkdir -m "$oct" -p "$_file"
 			}
 		;;
@@ -269,14 +277,17 @@ install_files() {
 		*)
 			# Skip directories and files which exist in verify mode.
 			# [ -d "$_file" ] || ! test "$flag" "$_file" || continue
-			{ [ ! -d "$_file" ] && ! test "$flag" "$_file"; } || continue
+			{ [ ! -d "$_file" ] && ! test "$flag" "$_file"; } || {
+				[ ! -z "$file" ] || continue
+				[ ! -d "$_file" ] && continue || "$@" \rm -rf "$_file"
+			}
 
 			# Neovim
 			# mv to '/usr/share/locale/cs.cp1250/LC_MESSAGES/nvim.mo' failed
 			local dir="${_file%/*}"
 
 			[ -d "$dir" ] || {
-				local oct="$(// delegate -- file_rwx "$ext_dir${file%/*}")"
+				local oct="$(// delegate -- file_rwx "$extract_dir${file%/*}")"
 				"$@" \mkdir -m "$oct" -p "$dir"
 			}
 
@@ -295,8 +306,8 @@ install_files() {
 			if [ -h "$_file" ]; then
 				# Copy the file to the destination directory overwriting
 				# any existing file.
-				"$@" \cp -fP "$ext_dir$file" "${_file%/*}/." ||
-				// die "cp $ext_dir$file to" "'${_file%/*}/.' failed"
+				"$@" \cp -fP "$extract_dir$file" "${_file%/*}/." ||
+				// die "cp $extract_dir$file to" "'${_file%/*}/.' failed"
 
 			else
 
@@ -304,19 +315,26 @@ install_files() {
 				# b) identifiable as related to the package manager.
 				local __tmp="${_file%/*}"/__kiss-tmp-"$repo_name"-"${file##*/}"-"$KISS_PID"
 
+				[ -h "$extract_dir$file" ] ||
+				[ -f "$extract_dir$file" ] || // die "$extract_dir$file" "does not exist"
+
 				# Copy the file to the destination directory with the
 				# temporary name created above.
-				"$@" \cp -fP "$ext_dir$file" "$__tmp" &&
+				# cp: can't stat '$EXTRACT_ROOT/llvm/var/db/kiss/choices/llvm>usr>bin>bugpoint': No such file or directory
+				# But it was there
+				"$@" \cp -fP "$extract_dir$file" "$__tmp" &&
 
-				# Atomically move the temporary file to its final
-				# destination. The running processes will either get
-				# the old file or the new one.
-				"$@" \mv -f "$__tmp" "$_file" ||
+				# Atomically move the temporary file to its final destination.
+				# The running processes will either get the old file or the new one.
+				#
+				# "$@" \mv -f "$__tmp" "$_file" ||
+				# // die "mv $__tmp to" "'$_file' failed"
 				# Extremely slow
-				# "$@" rsync -aqX --remove-source-files "$__tmp" "$_file" ||
-				// die "mv $__tmp to" "'$_file' failed"
+				"$@" rsync -aqX --remove-source-files "$__tmp" "$_file" ||
+				// die "$@ rsync -aqX --remove-source-files \"$__tmp\" \"$_file\"" "failed"
 			fi
 	esac || return 1; done
+	"$@" sync
 }
 
 archive() {
@@ -523,6 +541,39 @@ maintain() {
 	done
 }
 
+# $1 $repo_name
+manifest_validate() {
+	_level_2
+	# NOTE: repo_name comes from caller.
+	local repo_urn="$1"
+	local repo_name="${repo_urn##*/}"
+	repo_name="${repo_name%%@*}"
+	// log "$repo_name" "checking if manifest valid"
+
+	// log '$EXTRACT_ROOT/$repo_name' "$EXTRACT_ROOT/$repo_name"
+	// log 'manifest file' "$db/$repo_name/manifest"
+
+	shift 1
+
+	local tar_manifest="$EXTRACT_ROOT/$repo_name/$db/$repo_name/manifest"
+	[ -f "$EXTRACT_ROOT/$repo_name/$db/$repo_name/manifest" ] ||
+	// die '$tar_manifest' "'$tar_manifest' does not exist"
+	local index=0
+	while read -r line; do
+		[ -e "$EXTRACT_ROOT/$repo_name$line" ] ||
+		[ -h "$EXTRACT_ROOT/$repo_name$line" ] || {
+			: $((index += 1))
+			// log '$tar_manifest' "$(delegate -- format "$index") $line"
+			set -- "$@" "$line"
+		}
+	done < "$tar_manifest"
+
+	for f do
+		// log '$f' "$f"
+		// die "$repo_name" "manifest contains $# non-existent files"
+	done
+}
+
 # Return recommended repo source's $result_address
 # How to use
 # dispose "$repo_name" "$base_dir" "${repo_main%/*}" "${reference%/*}" "$index_global"
@@ -677,6 +728,140 @@ dispose() (
 	printf "$RS%s" "$result_address"
 )
 
+# $1 repo_urn : package repo url/uri
+conflicts() {
+	_level_2
+	# Check to see if a package conflicts with another.
+	local repo_urn="$1"
+	local repo_name="${repo_urn##*/}"
+	repo_name="${repo_name%%@*}"
+	is_repos "$repo_urn" ||
+		repo_urn="$(// delegate -- repo_trace "$repo_name")"
+
+	// log "$repo_name" "checking for package conflicts"
+
+	local manifest_files="$( \
+		// delegate -- slot_aquire "$repo_name" "manifest-files")"
+	local found_conflicts="$( \
+		// delegate -- slot_aquire "$repo_name" "found-conflicts")"
+	local tar_manifest="$EXTRACT_ROOT/$repo_name/$db/$repo_name/manifest"
+	[ -f "$tar_manifest" ] || // die "$tar_manifest" "does not exist"
+	[ -s "$tar_manifest" ] || // die '$tar_manifest' "'$tar_manifest' is empty"
+	# Filter the tarball's manifest and select only files. Resolve all
+	# symlinks in file paths as well.
+	while read -r file; do case "$file" in *[!/])
+		# // resolve_path "$file"
+		local rpath="$(// delegate -- resolve_path "$file")"
+		printf '%s\n' "$rpath"
+	esac done < "$tar_manifest" > "$manifest_files"
+
+	[ -s "$manifest_files" ] || // die '$tar_manifest' "'$tar_manifest' is empty"
+
+	cd "$EXTRACT_ROOT/$repo_name"
+
+	set +f
+	# All installed packages manifest
+	set -f "$KISS_ROOT/$db"/*/manifest
+
+	# Remove the current package from the manifest list.
+	local complement="$( \
+		// delegate -- replace " $* " " " " $KISS_ROOT/$db/$repo_name/manifest ")"
+
+	# Intentional, globbing disabled.
+	# shellcheck disable=2046,2086
+	set -- $complement
+	# // log '$@' "$(esceval "$@")"
+	# Return here if there is nothing to check conflicts against.
+	! equ "$#" 0 || return 0
+
+	# Store the list of found conflicts in a file as we'll be using the
+	# information multiple times. Storing things in the cache dir allows
+	# us to be lazy as they'll be automatically removed on script end.
+	grep -Fxf "$manifest_files" -- "$@" 2>/dev/null > "$found_conflicts" || :
+
+	local safe=
+	# Enable alternatives automatically if it is safe to do so.
+	# This checks to see that the package that is about to be installed
+	# doesn't overwrite anything it shouldn't in '$KISS_ROOT/$db'.
+	grep -q ":$sys_db/" "$found_conflicts" || safe=1
+
+	[ -s "$found_conflicts" ] || return 0
+
+	// war '$found_conflicts' "$found_conflicts"
+	local index=0
+	while read -r line; do
+		: $((index += 1))
+		// debug '$found_conflicts' "$(delegate -- format "$index") $line" &
+	done < "$found_conflicts"
+
+	[ -z "${KISS_CHOICE+x}" ] || ! equ "$safe" 1 || {
+		// log "Package '$repo_name' conflicts with another package" "!>"
+		// log "Run 'KISS_CHOICE= kiss i $repo_name' to add conflicts" "!>"
+		// die "as alternatives." "!>"
+	}
+
+	# [ -z "${KISS_CHOICE+x}" ] && equ "$safe" 1 && [ -s "$found_conflicts" ]
+	# This is a novel way of offering an "alternatives" system.
+	# It is entirely dynamic and all "choices" are created and
+	# destroyed on the fly.
+	#
+	# When a conflict is found between two packages, the file
+	# is moved to a directory called "choices" and its name
+	# changed to store its parent package and its intended
+	# location.
+	#
+	# The package's manifest is then updated to reflect this new location.
+	#
+	# The 'kiss alternatives' command parses this directory and
+	# offers you the CHOICE of *swapping* entries in this
+	# directory for those on the filesystem.
+	#
+	# The alternatives command does the same thing we do here,
+	# it rewrites manifests and moves files around to make this work.
+	#
+	# Pretty nifty huh?
+	local source
+	while IFS=: read -r _ source; do
+		source="$(standardize "$source")"
+		local nominal_target_dir="${source%/*}"
+		local real_source="$PWD$source"
+		local db_target="$PWD/$db/$repo_name"
+		// debug 'conflict source' "$real_source" &
+		# Create the "choices" directory inside of the tarball.
+		# This directory will store the conflicting file.
+		mkdir -p "$PWD/$cho_db"
+
+		# Construct the file name of the "db" entry of the
+		# conflicting file. ($repo_name>usr>bin>ls)
+		local fake_route="$(// delegate -- replace "$source" '>' '/')"
+
+		# [ -d "$real_source" ] || // mkdir -p "$real_source"
+		[ -e "$real_source" ] ||
+		[ -h "$real_source" ] || {
+			// war '$real_source' "'$real_source' does not exist"
+			continue
+		}
+		# rsync -aqz --rsync-path="mkdir -p ${real_source%/*} && rsync" \
+		#     "$source" "$real_source" ||
+		# // die 'rsync' "failed"
+
+		# Move the conflicting file to the choices directory
+		# and name it according to the format above.
+		[ -z "${real_source##*"$db_target"*}" ] ||
+		mv -f "$real_source" "$PWD/$cho_db/$repo_name$fake_route" 2>/dev/null || {
+			// log "File must be in $nominal_target_dir and not a symlink to it"
+			// die "This usually occurs when a binary is installed to /sbin" \
+				"instead of /usr/bin (example)"
+		}
+	done < "$found_conflicts"
+
+	// log "$repo_name" "converted all conflicts to choices (kiss a)"
+
+	# Rewrite the package's manifest to update its location
+	# to its new spot (and name) in the choices directory.
+	// pkg_manifest "$repo_urn" "$EXTRACT_ROOT" & // progress "$!" "manifest checking"
+}
+
 # $1 repo_urn : package path
 pkg_install() {
 	_level_2
@@ -765,6 +950,7 @@ pkg_install() {
 
 	// log '$repo_name' "$repo_name"
 	// log '$repo_target' "$repo_target"
+	# For binary extraction
 	local extract_dir="$EXTRACT_ROOT/$repo_name"
 	local extract_db_dir="$extract_dir/$db"
 	local pkg_dir="$PKG_ROOT/$repo_name"
@@ -773,13 +959,14 @@ pkg_install() {
 
 	empty "$extract_dir" ||
 	# find "$extract_dir" -mindepth 1 -delete
-		# for item in $(find "$extract_dir" -type d -mindepth 1 -maxdepth 1); do
-		for item in $(// as_own "$EXTRACT_ROOT" \
-			find "$extract_dir" -mindepth 1 -maxdepth 1); do
-			# choices folder items won't accept removing by normal users even it's is owned by the normal user
-			# [ ! -e "$item" ] || [ ! -h "$item" ] ||
-			// as_usr "root" \rm -rf "$item"
-		done
+	# for item in $(find "$extract_dir" -type d -mindepth 1 -maxdepth 1); do
+	for item in $(// as_own "$EXTRACT_ROOT" \
+		find "$extract_dir" -mindepth 1 -maxdepth 1); do
+		# choices folder items won't accept removing by normal users even it's is owned by the normal user
+		# [ ! -e "$item" ] || [ ! -h "$item" ] ||
+		// as_usr "root" \rm -rf "$item"
+	done
+
 	empty "$TEMP_ROOT/$repo_name" ||
 	// as_own "$TEMP_ROOT" find "$TEMP_ROOT/$repo_name" -mindepth 1 -delete
 
@@ -882,7 +1069,7 @@ pkg_install() {
 	// run_hook     pre-install "$repo_name" "$extract_dir"
 	// run_hook_pkg pre-install "$repo_name" "$repo_ver" "$repo_rel" "$repo_dir"
 
-	// conflicts "$repo_name" & progress "conflicts checking" "$!"
+	// conflicts "$repo_name" & // progress "$!" "conflicts checking"
 
 	// log "$repo_name" "installing package (${tar_file##*/})"
 
@@ -912,7 +1099,7 @@ pkg_install() {
 	// delegate -- slot_aquire "$repo_name" "manifest-reverse")"
 	sort "$tar_manifest" > "$manifest_reverse"
 
-	# Block being able to abort the script with Ctrl+C during installation.
+	# Block being able to abort the script with Ctrl-C during installation.
 	# Removes all risk of the user aborting a package installation leaving
 	# an incomplete package installed.
 	// trap_off    # trap '' INT
@@ -929,29 +1116,34 @@ pkg_install() {
 		remove="$remove 3< $etcsums_clone"
 		verify="$verify 3< $etcsums_clone"
 	}
+
 	// log '$overwrite' "$overwrite"
-	// log '$remove' "$remove"
-	// log '$verify' "$verify"
-	# Install the package's files by iterating over its manifest.
+	// log '$remove'    "$remove"
+	// log '$verify'    "$verify"
 	{
-		/ // install_files $overwrite &&
+		# Install the package's files by iterating over its manifest.
+		{
+			/ // install_files $overwrite &&
 
 		# This is the aforementioned step removing any files from the old
-		# version of the package if the installation is an update. Each file
-		# type has to be specially handled to ensure no system breakage occurs.
-		/ // remove_files $remove &&
+			# version of the package if the installation is an update. Each file
+			# type has to be specially handled to ensure no system breakage occurs.
+			/ // remove_files $remove &&
 
 		# Install the package's files a second time to fix any mess caused by
-		# the above removal of the previous version of the package.
-		/ // install_files $verify;
+			# the above removal of the previous version of the package.
+			/ // install_files $verify;
 
-	} || {
-		// clean_all "i" "$repo_name"    # clean_all
-		// war "$repo_name" "Failed to install package"
-		// die "$repo_name" "The file system is currently in a dirty state and requires manual maintenance"
-	}
+		} || {
+			// clean_all "i" "$repo_name"    # clean_all
+			// war "$repo_name" "Failed to install package"
+			// die "$repo_name" "The file system is currently in a dirty state and requires manual maintenance"
+		}
+	} & install_id=$!
+	// progress "$install_id" "installing"
+
 	# Reset 'trap' to its original value. Installation is done so we no longer
-	# need to block 'Ctrl+C'.
+	# need to block 'Ctrl-C'.
 	// trap_on "install" "$repo_name" # trap clean_all EXIT INT
 
 	# arg1: post-install
@@ -1052,7 +1244,7 @@ pkg_install() {
 			// delegate '\n' repo_trace "$repo_name" "pure" "-d" "$KISS_PATH"); do
 			index_global="$((index_global + 1))"
 			[ -n "${repo_main:+x}" ] || continue
-			[ "${repo_main##*/}" == "$repo_name" ] || continue
+			[ "${repo_main##*/}" = "$repo_name" ] || continue
 			ok "${repo_main##*"${repo_base}"*}" ||
 			// die '$repo_main' "$repo_main [$index_global]"
 			// log '$repo_main' "$repo_main [$index_global]"
@@ -1186,7 +1378,7 @@ pkg_install() {
 	#       { [ "$ver" = "$repo_ver" ] && [ "$rel" = "$repo_rel" ] && [ "$repo" = "$target_source" ]; } || {
 	#           local found=0
 	#           for item in $version_list; do
-	#               [ "$item" == "${ver} ${rel} ${repo}" ] || continue
+	#               [ "$item" = "${ver} ${rel} ${repo}" ] || continue
 	#               found=1
 	#               break
 	#           done
@@ -1235,7 +1427,7 @@ pkg_install() {
 	printf '%s\n' "return 1"`
 
 
-	[ "$repo_ver" == "$_ver" ] && [ "$repo_rel" == "$_rel" ] ||
+	[ "$repo_ver" = "$_ver" ] && [ "$repo_rel" = "$_rel" ] ||
 	// die '$repo_name' "$repo_name"
 
 	// density_out "$repo_target"   "${target_ancestor-}" "0"
@@ -1284,7 +1476,7 @@ pkg_remove() {
 	# shellcheck disable=2030,2031
 	[ -n "${KISS_FORCE+x}" ] || // removable "$repo_name"
 
-	# Block being able to abort the script with 'Ctrl+C' during removal.
+	# Block being able to abort the script with 'Ctrl-C' during removal.
 	# Removes all risk of the user aborting a package removal leaving an
 	# incomplete package installed.
 	# trap '' INT
@@ -1316,62 +1508,293 @@ pkg_remove() {
 		}
 	}
 
-	// as_own "$KISS_ROOT/" rm -rf "$repo_target"
+	// as_own "$KISS_ROOT/" \rm -rf "$repo_target"
 
 	# Reset 'trap' to its original value. Removal is done so
-	# we no longer need to block 'Ctrl+C'.
+	# we no longer need to block 'Ctrl-C'.
 	# trap '// clean_all "r" "$repo_name"' EXIT INT
 	// trap_on "r" "$repo_name"
 
 	// log "$repo_name" "removed successfully"
 }
 
-pkg_swap() {
+manifest_replace() {
 	_level_2
+	local repo_name="$1"
+	local found_line="$2"
+	local replace_line="$3"
+	# Replace the matching line in the manifest with the desired replacement.
+	# This used to be a 'sed' call which turned out to be a little
+	# error-prone in the some cases. This new method is a tad slower but ensures
+	# we never wipe the file due to a command error.
+	local manifest_replace_buffer="$( \
+		// delegate -- slot_aquire "$repo_name" "manifest-replace-${2##*/}")"
+
+	while read -r line; do
+		! equ "$line" "$found_line" || line="$replace_line"
+
+		printf '%s\n' "$line"
+	done < "$KISS_ROOT/$db/$repo_name/manifest" | sort -r > "$manifest_replace_buffer"
+
+	mv -f "$manifest_replace_buffer" "$KISS_ROOT/$db/$repo_name/manifest"
+}
+
+# Usage:
+# file_activate "llvm" "/usr/bin/llvm-ar"
+file_activate() {
+	_level_2
+	// debug '$#' "$#" &
+	// debug '$@' "$(esceval "$@")" &
+
+	local repo_activate="$1"
+	[ -d "$KISS_ROOT/$db/$repo_activate" ] ||
+		// die '$KISS_ROOT/$db/$repo_activate' "'$KISS_ROOT/$db/$repo_activate' not found"
+
+	local target="$2"
+	target="$(standardize "$target")"
+
+	# local right_no_leading_slash="$target"
+	# [ "$(expr substr "$target" 1 1)" != "/" ] ||
+	# 	right_no_leading_slash=="${target#/}"
+
+	# [ -f "$KISS_ROOT/${target#/}" ] ||
+	# 	// war '$KISS_ROOT/${target#/}' "'$KISS_ROOT/${target#/}' does not exist"
+
+	local repo_in_use="$3"
+	# local repo_not_in_use="$4"
+
+    # local repo_in_use="$(// delegate -- manifest_repo "$target")"
+	# # Might be a list?
+	# local repo_not_in_use=
+	# [ ! -z "$repo_in_use" ] ||
+	# [ ! -f "$KISS_ROOT/${target#/}" ] || {
+	# 	set +f
+	# 	set -f -- "$KISS_ROOT/$db"/*/manifest
+	# 	local target_choice="$(// delegate -- replace "$target" '>' '/')"
+	# 	# local file_contains_target_choice="$(// as_own "$KISS_ROOT/" grep -lF "$target_choice" "$@" 2>/dev/null)"
+	# 	local file_contains_target_choice="$(grep -lF "$target_choice" "$@" 2>/dev/null)"
+	# 	// log '$file_contains_target_choice' "$file_contains_target_choice"
+	# 	repo_not_in_use="${file_contains_target_choice%/manifest}"
+	# 	repo_not_in_use="${repo_not_in_use##*/}"
+	# 	[ -z "$repo_in_use" ] &&
+	# 	[ ! -z "$repo_not_in_use" ] ||
+	# 	// war '$target' "File '$KISS_ROOT/${target#/}' exists on filesystem${newline}\
+	# 	but isn't owned by the repos in use"
+	# }
+
+	# [ -z "$repo_not_in_use" ] ||
+	# [ ! -z "$repo_in_use" ] ||
+	# // war '$repo_not_in_use' "$repo_not_in_use" &
+
+	# [ ! -z "$repo_in_use" ] || {
+	# 	// war '$repo_in_use' "'$repo_in_use', nothing to do" &
+	# 	return 0
+	# }
+
+	[ ! -z "$repo_activate" ] ||
+	// log '$repo_activate' "$repo_activate" &
+
+	# [ ! -z "$repo_in_use" ] ||
+	# [ "$repo_not_in_use" = "$repo_activate" ] ||
+	# [ -z "$repo_not_in_use" ] ||
+	# {
+	# 	// war '$repo_not_in_use != $repo_activate' "'$repo_not_in_use' != '$repo_activate',${newline}\
+	# 	use '$repo_not_in_use' '$target' to activate it" &
+	# 	return 0
+	# }
+
+	[ "$repo_in_use" != "$repo_activate" ] || {
+		// war '$repo_in_use = $repo_activate' "'$repo_in_use' = '$repo_activate', nothing to do" &
+		return 0
+	}
+
+	# [ -z "$repo_not_in_use" ] ||
+	# [ -d "$KISS_ROOT/$db/$repo_not_in_use" ] ||
+	# 	// die '$KISS_ROOT/$db/$repo_not_in_use' "'$KISS_ROOT/$db/$repo_not_in_use' not found"
 	# Swap between package alternatives.
-	[ -d "$KISS_ROOT/$db/$1" ] || // die '$KISS_ROOT/$db/$1' "not found $KISS_ROOT/$db/$1"
+	[ -z "$repo_in_use" ] ||
+	[ -d "$KISS_ROOT/$db/$repo_in_use" ] ||
+		// die '$KISS_ROOT/$db/$repo_in_use' "'$KISS_ROOT/$db/$repo_in_use' not found"
 
-	local fake_route="$(// delegate -- replace "$1$2" '>' '/')"
+	[ -z "$repo_in_use" ] || {
+		local repo_in_use_choice="$(// delegate -- replace "$repo_in_use$target" '>' '/')"
+		// debug '$repo_in_use_choice' "$repo_in_use_choice" &
+	}
 
-	[ -f "$sys_ch/$fake_route" ] || [ -h "$sys_ch/$fake_route" ] ||
-		// die "$sys_ch/$fake_route" "Alternative '$1 ${2:-null}' doesn't exist"
+	local repo_activate_choice="$(// delegate -- replace "$repo_activate$target" '>' '/')"
+	// debug '$repo_activate_choice' "$repo_activate_choice" &
 
-	if [ -f "$KISS_ROOT/${2#/}" ]; then
-		// pkg_owner "/${2#/}" ||
-			// die '$2' "File '$2' exists on filesystem but isn't owned"
+	local activate_path="$KISS_ROOT/$cho_db/$repo_activate_choice"
+	[ -h "$activate_path" ] ||
+	[ -f "$activate_path" ] || {
+		# [ -h "$activate_path" ] ||
+		# Here are some symbollinks point to local address that might not exist
+		# activate_path="$(readlink -fn "$activate_path")"
+		# [ -f "$activate_path" ] ||
+		// die "$activate_path" "alternative to '$repo_in_use' doesn't exist"
+	}
 
-		// log "swapping '$2'" "to '$1'"
+	[ -z "$repo_in_use" ] ||
+	# Based on above centences, only files need to be copied/backuped
+	if [ -f "$activate_path" ]; then
+
+		// log "$activate_path" "gonna cover '$target'" &
 
 		# Convert the current owner to an alternative and rewrite its manifest
 		# file to reflect this.
-		// as_own "$KISS_ROOT/" cp -Pf "$KISS_ROOT/${2#/}" "$sys_ch/$_owns>${fake_route#*>}"
-		// manifest_replace "$_owns" "$2" "/$cho_db/$_owns>${fake_route#*>}"
+		# // as_own "$KISS_ROOT/" cp -Pf "$KISS_ROOT/${target#/}" "$sys_ch/$repo_in_use>${target#*>}"
+		[ ! -f "$KISS_ROOT/${target#/}" ] ||
+		// as_own "$KISS_ROOT/" cp -Pf "$KISS_ROOT/${target#/}" "$KISS_ROOT/$cho_db/$repo_in_use_choice"
+		// manifest_replace "$repo_in_use" "$target" "/$cho_db/${repo_in_use_choice#*/}"
 	fi
 
 	# Convert the desired alternative to a real file and rewrite the manifest
 	# file to reflect this. The reverse of above.
-	mv -f "$sys_ch/$fake_route" "$KISS_ROOT/${2#/}"
-	// manifest_replace "$1" "/$cho_db/$fake_route" "$2"
+	# mv -f "$activate_path" "$KISS_ROOT/${target#/}"
+	cp -Pf "$activate_path" "$KISS_ROOT/${target#/}"
+	// manifest_replace "$repo_activate" "/$cho_db/$repo_activate_choice" "$target"
 }
 
-# "$@" :
+# Usage:
+# Outside kiss debug environment
+# kiss a llvm
+# Inside  kiss debug environment
+#      a llvm
+# pkg_alternatives llvm /usr/bin/llvm-ar
+# pkg_alternatives llvm
+# pkg_alternatives llvm -
+# pkg_alternatives -
+# pkg_alternatives
 pkg_alternatives() {
 	_level_2
-	if equ "$1" -; then
-		while read -r repo_name path; do
-			// pkg_swap "$repo_name" "$path"
+	local repo_activate=
+	[ -z "${1:+x}" ] || {
+		repo_activate="$1"
+		equ "$repo_activate" - ||
+		[ -d "$KISS_ROOT/$db/$repo_activate" ] ||
+			// die '$KISS_ROOT/$db/$repo_activate' "'$KISS_ROOT/$db/$repo_activate' not found"
+		shift 1
+	}
+
+	if equ "$repo_activate" -; then
+		// war '-' "Input repo name and new binary path like${newline}\
+			 'llvm /usr/bin/llvm-ar' to perform the swapping${newline}\
+			Ctrl-C to quit"
+		while read -r repo_activate target; do
+			// file_activate "$repo_activate" "$target"
 		done
 
-	elif ok "$1"; then
-		// pkg_swap "$@"
+	elif ok "$repo_activate" && [ "$#" -eq "0" ]; then
+		(
+			local item target index
+			set +f
+
+			# llvm wIll lose 14 items (which are links) ? and will give full path
+			# index=0
+			# for item in $(\ls -1 "$KISS_ROOT/$cho_db/"* 2> /dev/null | grep "${repo_activate}>"); do
+			# 	target="$(// delegate -- replace "/${item#*"${repo_activate}>"}" '/' '>')"
+			# 	// debug_filter -- printf '%s %s\n' "$repo_activate" "$target" >> "$KISS_TMPDIR/logs/choices_00.log" &
+			# 	// log "$repo_activate" "$target" &
+			# 	: $((index += 1))
+			# done
+			# Without full path
+			# index=0
+			# for item in $(\ls -1 "$KISS_ROOT/$cho_db/" 2> /dev/null | grep "${repo_activate}>"); do
+			# 	target="$(// delegate -- replace "/${item#*"${repo_activate}>"}" '/' '>')"
+			# 	// debug_filter -- printf '%s %s\n' "$repo_activate" "$target" >> "$KISS_TMPDIR/logs/choices_01.log" &
+			# 	// log "$repo_activate" "$target" &
+			# 	: $((index += 1))
+			# done
+
+			index=0
+
+			set -- "$KISS_ROOT/$db"/*/manifest
+			local complement="$( \
+				// delegate -- replace " $* " " " " $KISS_ROOT/$db/$repo_activate/manifest ")"
+			set -- $complement
+
+			# local item_valid= target_choice repo_in_use= repo_not_in_use= \
+			local item_valid= target_choice repo_in_use= \
+				target_manifest_or_null file_contains_target_choice
+			local target_manifest="$KISS_ROOT/$db/$repo_activate/manifest"
+			for item in "$KISS_ROOT/$cho_db/"*; do
+				# set -f
+				case "$item" in *"/$repo_activate>"*)
+					// debug '$item' "$item" &
+					target_choice="${item#*"${repo_activate}>"}"
+					// debug '$target_choice' "$target_choice" &
+					# local target_manifest_or_null="$(// as_own "$KISS_ROOT/" grep -lF "$item" "$KISS_ROOT/$db/$repo_activate/manifest" 2>/dev/null)"
+					# set -x
+					# grep -lF ">$target_choice" "$target_manifest" 2> /dev/null || :
+					target_manifest_or_null="$(grep -lF ">$target_choice" "$target_manifest" 2> /dev/null || :)"
+					# set +x
+					// debug '$target_manifest_or_null' "$target_manifest_or_null" &
+
+					[ "$target_manifest_or_null" = "$target_manifest" ] || continue
+
+					target="$(// delegate -- replace "/$target_choice" '/' '>')"
+					// debug_filter -- printf '%s %s\n' "$repo_activate" "$target" >> "$KISS_TMPDIR/logs/choices_02.log" &
+
+					{
+						[ ! -z "$repo_in_use" ] &&
+						[ "$(// delegate -- manifest_repo "$target" "$KISS_ROOT/$db/$repo_in_use/manifest")" = "$repo_in_use" ]
+					} ||
+    				repo_in_use="$(// delegate -- manifest_repo "$target" "$@")"
+
+					# When run alternative twice, $repo_in_use will be empty
+					# [ ! -z "$repo_in_use" ] || continue
+
+					# Might be a list?
+					# repo_not_in_use=
+
+					# [ ! -z "$repo_in_use" ] ||
+					# [ ! -f "$KISS_ROOT/${target#/}" ] || {
+					# 	# set +f
+					# 	# set -f -- "$KISS_ROOT/$db"/*/manifest
+					# 	# local target_choice="$(// delegate -- replace "$target" '>' '/')"
+					# 	# local file_contains_target_choice="$(// as_own "$KISS_ROOT/" grep -lF "$target_choice" "$@" 2>/dev/null)"
+					# 	file_contains_target_choice="$(grep -lF "$target_choice" "$@" 2>/dev/null)"
+					# 	// log '$file_contains_target_choice' "$file_contains_target_choice" &
+					# 	repo_not_in_use="${file_contains_target_choice%/manifest}"
+					# 	repo_not_in_use="${repo_not_in_use##*/}"
+					# 	[ -z "$repo_in_use" ] &&
+					# 	[ ! -z "$repo_not_in_use" ] ||
+					# 	// war '$target' "File '$KISS_ROOT/${target#/}' exists on filesystem${newline}\
+					# 	but isn't owned by the repos in use"
+					# }
+
+					// cue "$repo_activate" "$target" &&
+					# // file_activate "$repo_activate" "$target" "$repo_in_use" "$repo_not_in_use"
+					// file_activate "$repo_activate" "$target" "$repo_in_use" &
+
+					: $((index += 1))
+				esac
+			done
+			set -f
+			[ "$index" -eq "0" ] &&
+			// war '$index' "'$(// delegate -- format $index)' file  processed" ||
+			// war '$index' "'$(// delegate -- format $index)' files processed"
+		) & // progress "$!" "activate $repo_activate"
+	elif ok "$repo_activate" && equ "$1" "-"; then
+		// war '$repo_activate' "Input new binary path like '/usr/bin/llvm-ar'${newline}\
+			which beclong to repo '$repo_activate', please${newline}\
+			Ctrl-C to quit"
+		while read -r target; do
+			// file_activate "$repo_activate" "$target"
+		done
+
+	elif ok "$repo_activate" && [ "$#" -ge "1" ]; then
+		// file_activate "$repo_activate" "$@"
 
 	else
 		# Go over each alternative and format the file name for listing.
-		# repo_name>usr>bin>ls
-		set +f; for repo_name in "$sys_ch/"*; do
-			local real_route="$(// delegate -- replace "${repo_name##*/}" '/' '>')"
-			# printf '%s %s\n' "${real_route%%/*}" "/${real_route#*/}"
-			// log "${real_route%%/*}" "/${real_route#*/}"
+		# item>usr>bin>ls
+		local item target index=0
+		set +f; for item in "$KISS_ROOT/$cho_db/"*; do
+			target="$(// delegate -- replace "${item##*/}" '/' '>')"
+			# printf '%s %s\n' "${target%%/*}" "/${target#*/}"
+			// log "${target%%/*}" "/${target#*/}" &
+			: $((index += 1))
 		done
 		set -f
 	fi
@@ -1468,8 +1891,8 @@ subshell_all() {
 		# SESSION_PPID=\"$SESSION_PPID\" \
 		# SHELL_OPTIONS=\"e$(printf '%s' "$-")\" \
 
-		local env_variables=" RUSTFLAGS=\"--remap-path-prefix=${PWD=.} ${RUSTFLAGS-}\" "
-		# environment "RUSTFLAGS" "--remap-path-prefix=${PWD=.} ${RUSTFLAGS-}"
+		local env_variables=" RUSTFLAGS=\"--remap-path-prefix=${PWD=.} -Clinker=rust-lld ${RUSTFLAGS-}\" "
+		# environment "RUSTFLAGS" "--remap-path-prefix=${PWD=.} -Clinker=rust-lld ${RUSTFLAGS-}"
 		env_variables="$env_variables KISS_XHOST_ARCH=\"$KISS_XHOST_ARCH\" "
 		# environment "KISS_XHOST_ARCH" "$KISS_XHOST_ARCH"
 		env_variables="$env_variables KISS_XBUILD_ARCH=\"$KISS_XHOST_ARCH\" "
@@ -1654,6 +2077,8 @@ subshell_all() {
 # action="$1"
 # shift 1
 # subshell_all "$action" "$@"
+
+
 
 
 
