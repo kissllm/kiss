@@ -41,7 +41,8 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 # kill_self() { error="${error:?}"; }
 # Interrupt didn't ruin your program, wrong design did it
 [ -n "${KISS_INNER_PIPE:+x}" ] &&
-	alias interrupt='exit 1' || {
+alias interrupt='exit 1' ||
+interrupt() {
 
 	[ -z "${KISS_AS_LIBRARY+x}" ] && {
 		# KISS_AS_LIBRARY not defined
@@ -60,7 +61,9 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 		# interrupt() { echo "Line: $lineno" && kill 0; }
 		# interrupt() { echo "Line: $lineno [$SCRIPT_NAME]" > /dev/stderr && exit 0; }
 		# interrupt() { echo "Line: $lineno scope: $scope [$SCRIPT_NAME]" > "$TTY" && exit 1; }
-		interrupt() {
+
+		# interrupt() {
+
 			local color_parent_origin="$color_parent" color_parent="$COLOR_FLAW"
 			local color_child_origin="$color_child"   color_child="$COLOR_HIGH"
 			local color_line_origin="$color_line"     color_line="$color_parent"
@@ -80,10 +83,11 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 			printf '%s\n' "$(see "${lineno_scope-"0"}" "$lineno" "interrupt" "[$SCRIPT_NAME]")" > "$TTY" &&
 
 			exit 1
-		}
+		# }
+
 		# interrupt() { exit 1; }
 		# Will exit the kiss "parent" process. You will have to reload it
-	} ||
+	} || {
 		# KISS_AS_LIBRARY defined
 		#
 		# These form can't work with //
@@ -93,7 +97,9 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 		# interrupt() { echo "Line: $lineno" && kill 0; }
 		# interrupt() { echo "Line: $lineno [$SCRIPT_NAME]" > /dev/stderr && kill 0; }
 		# interrupt() { echo "Line: $lineno scope: $scope [$SCRIPT_NAME]" > "$TTY" && kill 0; }
-		interrupt() {
+
+		# interrupt() {
+
 			local color_parent_origin="$color_parent" color_parent="$COLOR_FLAW"
 			local color_child_origin="$color_child"   color_child="$COLOR_HIGH"
 			local color_line_origin="$color_line"     color_line="$color_parent"
@@ -126,7 +132,9 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 			#   nohup /usr/bin/kiss-kill $SESSION_PID true > /dev/null 2>&1 &
 			#   # kill -KILL -"$SESSION_PID" && kill 0 && exit 1;
 			# }
-		}
+
+		# }
+
 		# interrupt() { kill 0; }
 		# interrupt() {
 		#   echo "Line: $lineno [$0]" > /dev/stderr &&
@@ -146,6 +154,7 @@ printf '%s\n' "Inside $SCRIPT_NAME"
 		# alias interrupt='kill_self'
 
 		# alias interrupt='{ : ${missing_variable_ejector:?} 2>/dev/null; }'
+	}
 }
 
 alias /='eval'
@@ -675,11 +684,13 @@ equ "${KISS_COLOR}" 0 || {
 	: "${COLOR_HINT:="\033[1;046m"}"        && export COLOR_HINT   && color_hint="$COLOR_HINT"
 	# Pink color 1;105 looks like warnings
 	# : "${COLOR_HINT:="\033[1;105m"}"      && export COLOR_HINT   && color_hint="$COLOR_HINT"
-	: "${COLOR_BOOT:="\033[1;105m"}"        && export COLOR_BOOT   && color_hint="$COLOR_BOOT"
+	: "${COLOR_BOOT:="\033[1;105m"}"        && export COLOR_BOOT   && color_boot="$COLOR_BOOT"
 	# : "${COLOR_WARN:="\033[1;104m"}"      && export COLOR_WARN   && color_warn="$COLOR_WARN"
 	: "${COLOR_WARN:="\033[1;044m"}"        && export COLOR_WARN   && color_warn="$COLOR_WARN"
 	: "${COLOR_HIGH:="\033[1;127m"}"        && export COLOR_HIGH   && color_high="$COLOR_HIGH"
-	: "${COLOR_FLAW:="\033[1;103m"}"        && export COLOR_FLAW   && color_flaw="$COLOR_FLAW"
+	# 1;103 is not clear in GUI terminal emulator
+	: "${COLOR_FLAW:="\033[1;105m"}"        && export COLOR_FLAW   && color_flaw="$COLOR_FLAW"
+	# : "${COLOR_FLAW:="\033[1;103m"}"      && export COLOR_FLAW   && color_flaw="$COLOR_FLAW"
 	# Pipe error
 	# : "${COLOR_PIPE:="\033[38;05;015m"}"  && export COLOR_PIPE   && color_pipe="$COLOR_PIPE"
 	# : "${COLOR_PIPE:="\033[38;05;119m"}"  && export COLOR_PIPE   && color_pipe="$COLOR_PIPE"
@@ -689,6 +700,17 @@ equ "${KISS_COLOR}" 0 || {
 	: "${COLOR_PIPE:="\033[38;05;153m"}"    && export COLOR_PIPE   && color_pipe="$COLOR_PIPE"
 	readonly COLOR_PARENT COLOR_CHILD COLOR_END COLOR_LINE COLOR_HINT COLOR_WARN COLOR_HIGH COLOR_FLAW COLOR_PIPE
 }
+
+alias color_boot_local_begin=" \
+local color_parent_origin=\"\$color_parent\" color_parent=\"\$COLOR_BOOT\"   \
+local  color_child_origin=\"\$color_child\"   color_child=\"\$COLOR_HIGH\"   \
+local   color_line_origin=\"\$color_line\"     color_line=\"\$color_parent\" \
+"
+alias color_boot_local_end=" \
+local   color_line=\"\$color_line_origin\"   \
+local  color_child=\"\$color_child_origin\"  \
+local color_parent=\"\$color_parent_origin\" \
+"
 
 LINES="$(wc -l "/usr/include/kiss/$SCRIPT_NAME" | cut -f 1 -d ' ')"
 [ ! -s "/usr/bin/kiss" ] || {
@@ -811,13 +833,13 @@ format() {
 # error_trap="set -E; trap '// trace_line \"\$USER_OUTPUT\" \
 # \"\$FUNCNAME\" \"\$LINENO\" \"\$lineno_scope\" \"\$scope\"' ERR"
 
-	/ "$error_trap"
+	/ $error_trap
 
 }
 
 [ -z "${IS_KISS+x}" ] &&
-alias __="{ :; }" ||
-alias __="{ $error_trap; }"
+alias __='{ :; }' ||
+alias __='{ / $error_trap; }'
 
 : "${func_name:="${0##*/}"}"
 : "${scope:="${func_name}"}"
@@ -951,7 +973,7 @@ recursive_detection='[ "$scope" != "$func_name" ] || [ -z "${scope:+x}" ] || { /
 
 # input_debug="[ -z "\${KISS_DEBUG+x}" ] || // log '\$@' \"\$(esceval \"\$@\")\""
 # input_debug="debug \\$@ \"\$(esceval "$@")\""
-input_debug='debug \$@ "$(esceval "$@")"'
+input_debug='debug \$@ "$(esceval "$@")" & : '
 
 [ -z "${IS_KISS+x}" ] &&
 _level_2_preparation="{ local _level=2; $function_line; $recursive_detection; $input_debug; }" ||
@@ -981,6 +1003,7 @@ alias ____="{ $function_line; }"
 
 debug_filter() (
 	[ "$1" != "--" ] || shift 1
+	[ "$1" != "//" ] || shift 1
 	_level_0
 	# printf '%s %s\n' '$scope' "$scope"
 	# $func_name == debug_filter
@@ -994,7 +1017,8 @@ debug_filter() (
 			(
 				exec 8>"$lock_log";
 				flock -n 8 || {
-					"$@" >> "$INIT_OUTPUT"
+					# "$@" >> "$INIT_OUTPUT"
+					"$@" > "$TTY"
 					interrupt
 				}
 				# exec 8>&- "$@" >> "$INIT_OUTPUT"
@@ -1013,9 +1037,11 @@ debug_filter() (
 	local match=0
 	for item in ${KISS_DEBUG:-}; do
 		case "$scope" in *"${item}"*)
-			# result=0
-			# match=1
-			"$@" &
+			(
+				# result=0
+				# match=1
+				"$@" &
+			)
 			break
 		esac
 	done
@@ -1024,6 +1050,16 @@ debug_filter() (
 	# equ "$match" "0" || "$@"
 	# return "$result"
 )
+
+# Trying to trap progress() pid status
+# https://unix.stackexchange.com/questions/344360/collect-exit-codes-of-parallel-background-processes-sub-shells
+# trap_child() {
+# 	for pid in `jobs -p`; do
+# 		wait $pid || / 'job_$pid=$?'
+# 	done
+# }
+#
+# trap 'trap_child' CHLD
 
 # Without kiss-share file version
 # function_debug_filter=" \
@@ -1044,16 +1080,30 @@ debug_filter() (
 # https://stackoverflow.com/questions/70675246/replacing-newlines-with-the-string-n-with-posix-tools
 magic() { { cat -u; printf '\n'; } | awk -v ORS= '{print sep $0; sep="\\n"}'; }
 
+
 progress() {
-	local pid="$1"
-	local task_name="${2-}"
+	local repo_name="$1"
+	local pid="$2"
+	# Append an extra space for $element calculation in columns_dynamic()
+	local task_name="${3-} "
+
+	local start=`date +%s`
+
+	[ ! -z "${task_name:+x}" ] || task_name="please be patient while it is running... "
+	local task_name_length="${#task_name}"
 	# Does not work
 	# // war "$task_name" "may take a while, please be patient while it is running..."
 	# Newlines will interrupt normal display (density_out)
 	# printf '%s\n' "$(see "${lineno_scope-"0"}" "$lineno" "$task_name" \
 	#   "may take a while,${newline}\
 	#   please be patient while it is running...")" > "$TTY"
+	local scrolling_tips=
+	local task_name_plain="$(name_plain "${task_name%%\ }")"
 
+	# local scrolling_tips_file="$BUF_ROOT/$KISS_PID/$task_name_plain"
+	local scrolling_tips_file="$BUF_ROOT/$repo_name/$task_name_plain"
+	[ -d "$BUF_ROOT/$repo_name" ] || \mkdir "$BUF_ROOT/$repo_name"
+	: > "$scrolling_tips_file"
 	local columns="$(tput cols)"
 	: $((columns -= LENGTH_HEADER))
 	# xx% []
@@ -1062,25 +1112,102 @@ progress() {
 	# Versiion 2
 	# : $((columns -= 23))
 
+	[ ! -z "${RIGHT_TO_LEFT+x}" ] && {
+		local task_name_reverse= element
+		local index=$task_name_length
+		while [ "$index" -gt "0" ]; do
+			element="$(expr substr "$task_name" "$index" 1)"
+			# // log '$element' "$element"
+			task_name_reverse="$task_name_reverse$element"
+			: $((index -= 1))
+		done
+		task_name="$task_name_reverse"
+	} || {
+		: ${LEFT_TO_RIGHT=}
+	}
+	// log '$task_name' "$task_name"
+	local slash_left="/"
+	local slash_right="\\"
+	columns_dynamic() {
+		local reverse_index="$1"
+		[ "$((reverse_index % 2))" -eq "0" ] &&
+			slash="$slash_left" ||
+			slash="$slash_right"
+
+		[ "$reverse_index" -le "$task_name_length" ] ||
+			reverse_index=$((reverse_index % task_name_length))
+
+		local normal_index=$((task_name_length - reverse_index + 1))
+
+		local columns="$(tput cols)"
+		: $((columns -= LENGTH_HEADER))
+		: $((columns -= 13))
+
+		[ "$reverse_index" -le "$columns" ] ||
+			columns=$reverse_index
+
+		local scrolling_tips="$slash"
+		# [ "$slash" = "$slash_left" ] ||
+		# scrolling_tips="$slash"
+		local index=$normal_index element
+		while [ "$((index - normal_index))" -le "$columns" ]; do
+			element="$(expr substr "$task_name" $((index > task_name_length ? index % task_name_length : index)) 1)"
+			[ ! -z "${element:+x}" ] || element=" "
+
+			# [ "$slash" = "$slash_left" ] &&
+			# # scrolling_tips="${scrolling_tips:+"${scrolling_tips}${slash}"}${element}" ||
+			# scrolling_tips="${scrolling_tips}${element}${slash}" ||
+			# # scrolling_tips="${scrolling_tips:+"${scrolling_tips}${slash}"}${element}"
+			scrolling_tips="${scrolling_tips}${element}${slash}"
+
+			: $((index += 1))
+
+		done
+		# // log '$scrolling_tips' "$scrolling_tips"
+		echo "$scrolling_tips" > "$scrolling_tips_file"
+		printf "$RS%s" "$columns"
+	}
+
 	local bar=""
+	local reverse_index="1"
+
+	local index=1
+
+	columns="$(// delegate -- columns_dynamic "$reverse_index")"
+	scrolling_tips="$(cat "$scrolling_tips_file")"
 	while [ "${#bar}" -lt "$columns" ]; do
 		bar="$bar "
+		# bar="$bar${scrolling_tips:$index:1}"
+		# Failed?
+		# bar="$bar$(expr substr "$scrolling_tips" $index 1)" || :
+		: $((index += 1))
 	done
-	local index=0
 	# printf '[ %%\r' > "$say_pipe"
 	# printf '[ %%\r' > "$TTY"
 	# Versiion 1
 	# printf "$(printf "%$LENGTH_HEADER.0s")'  %% [%s]'\r" "" "$bar" > "$TTY"
-	printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %d %% %d\r" "$bar" 0 $lineno > "$TTY"
+	printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$bar" "000" $lineno > "$TTY"
+	# sleep 0.2
+	# printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$scrolling_tips" "000" $lineno > "$TTY"
 	# Versiion 2
 	# printf "%$LENGTH_HEADER.0s'%d : %d %% [%s]'\r" "" "$lineno" "0" "$bar" > "$TTY"
 	# While process is running...
-	while pid_alive "$pid" 2> /dev/null; do
+	local index=1
+	# while pid_alive "$pid" 2> /dev/null; do
+	while
+		pid_alive "$pid" 2> /dev/null
+		# pid_alive "$pid" 2> /dev/null ||
+		# { / "[ -z \"\${job_$pid+x}\" ]" && return 1; } ||
+		# { / "[ \"\${job_$pid}\" -eq \"0\" ]" && return 1; } ||
+		# // die '$scope' "'$scope' failed somewhere"
+	do
 
 		bar=""
 
-		[ "$index" -le "$columns" ] || index=0
+		columns="$(// delegate -- columns_dynamic "$(( ((index/2)) % task_name_length))")"
+		scrolling_tips="$(cat "$scrolling_tips_file")"
 
+		[ "$index" -le "$columns" ] || index=1
 		# local rest="$((index % 2))"
 
 		# local length="${#bar}"
@@ -1091,47 +1218,79 @@ progress() {
 		#   printf "%% [%s]\r" "$bar" > "$TTY"
 		# }
 
-		local bar_index=0
+		local bar_index=1
 		# [ "$rest" -eq "0" ] && {
-			while [ "$bar_index" -lt "$index" ]; do
-				local bar_rest="$((bar_index % 2))"
-				[ "$bar_rest" -eq "0" ] &&
-				bar="$bar/" || bar="$bar\\"
-				: $((bar_index += 1))
-			done
-			while [ "${#bar}" -lt "$columns" ]; do
-				bar="$bar "
-			done
-			# Versiion 1
-			# printf "$(printf "%$LENGTH_HEADER.0s")'  %% [%s]'\r" "" "$bar" > "$TTY"
-			printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %d %% %d\r" "$bar" 0 $lineno > "$TTY"
-			# Versiion 2
-			# printf "%$LENGTH_HEADER.0s'%d : %d %% [%s]'\r" "" "$lineno" "0" "$bar" > "$TTY"
-			# index=1
+		while [ "$bar_index" -lt "$index" ]; do
+			# local bar_rest="$((bar_index % 2))"
+			# [ "$bar_rest" -eq "0" ] &&
+			# bar="$bar/" || bar="$bar\\"
+
+			# bar="$bar${scrolling_tips:$bar_index:1}"
+			bar="$bar$(expr substr "$scrolling_tips" $bar_index 1)" || :
+
+			: $((bar_index += 1))
+		done
+
+		while [ "${#bar}" -lt "$columns" ]; do
+			bar="$bar "
+		done
+		# Versiion 1
+		# printf "$(printf "%$LENGTH_HEADER.0s")'  %% [%s]'\r" "" "$bar" > "$TTY"
+
+		printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$bar" "$(// delegate -- format "000" 3)" $lineno > "$TTY"
+		# sleep 0.4
+		# printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$scrolling_tips" "$(// delegate -- format "000" 3)" $lineno > "$TTY"
+
+		# Versiion 2
+		# printf "%$LENGTH_HEADER.0s'%d : %d %% [%s]'\r" "" "$lineno" "0" "$bar" > "$TTY"
+		# index=1
+		#
 		# } || {
 		#   while [ "$bar_index" -lt "$index" ]; do
 		#       bar="$bar\\"
 		#       : $((bar_index += 1))
 		#   done
-		#   while [ "${#bar}" -lt "$columns" ]; do
+		#   while [ "${#bar}" -lt "$(// delegate -- columns_dynamic "$index")" ]; do
 		#       bar="$bar "
 		#   done
 		#   printf "$(printf "%$LENGTH_HEADER.0s")'  %% [%s]'\r" "" "$bar" > "$TTY"
 		#   # index=0
 		# }
-		: $((index += 1))
+		: $((index += 2))
 		sleep 1
 	done
 
 	bar=""
+	reverse_index="$task_name_length"
+
+	columns="$(// delegate -- columns_dynamic "$reverse_index")"
+	scrolling_tips="$(cat "$scrolling_tips_file")"
+	index=1
 	while [ "${#bar}" -lt "$columns" ]; do
-		bar="$bar#"
+		# bar="$bar${scrolling_tips:$bar_index:1}"
+		bar="$bar$(expr substr "$scrolling_tips" $index 1)" || :
+		# bar="$bar#"
+		: $((index += 1))
 	done
 	# printf ' \%%] done! \r' > "$TTY"
 	# Versiion 1
 	# This implementation could merge multiple similar progress lines
 	# printf "$(printf "%$LENGTH_HEADER.0s")'  %% [%s]' done!\r" "" "$bar" > "$TTY"
-	printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %d %% %d\r" "$bar" 100 $lineno > "$TTY"
+
+	printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$bar" "100" $lineno > "$TTY"
+	# sleep 0.2
+	# printf "$(printf "%$LENGTH_HEADER.0s" "")[%s] %-3s %% %d\r" "$scrolling_tips" "100" $lineno > "$TTY"
+	local pid_status
+	wait $pid || pid_status=$!
+	[ -z "${pid_status:+x}" ] ||
+	[ "$pid_status" -eq "0" ] || {
+		(
+		local end=`date +%s`
+		local progress_time=$(expr $end - $start)
+		// log '$progress_time' "$progress_time"
+		) &
+		// die "$repo_name" "'$task_name' failed"
+	}
 	#
 	# printf "$(printf "%$LENGTH_HEADER.0s" "")'%d : %d %% [%s]' done!\n" $lineno 100 "$bar" > "$TTY" &
 	#
@@ -1139,6 +1298,13 @@ progress() {
 	# These implementation could not merge multiple similar progress lines
 	# printf "%$LENGTH_HEADER.0s'%d : %d %% [%s]' done!\r" "" "$lineno" "100" "$bar" > "$TTY"
 	# printf "%$LENGTH_HEADER.0s'%d : %d %% [%s]'\n" "" "$lineno" "100" "$bar" > "$TTY"
+	\rm -f "$scrolling_tips_file"
+
+	(
+	local end=`date +%s`
+	local progress_time=$(expr $end - $start)
+	// log "$repo_name" "$task_name takes $progress_time seconds"
+	) &
 }
 
 # Use kiss-debug directly might be better
@@ -1463,11 +1629,11 @@ key_filter() {
 	// debug '$#' "$#"
 	// debug_filter -- // debug '$@' "$(esceval "$@")"
 	local repo_name_left="${1##*/}"
-	local repo_name_fight="${2##*/}"
+	local repo_name_right="${2##*/}"
 	repo_name_left="${repo_name_left%%@*}"
-	repo_name_fight="${repo_name_fight%%@*}"
+	repo_name_right="${repo_name_right%%@*}"
 	# [ "${1##*/}" = "${2##*/}" ]
-	[ "$repo_name_left" = "$repo_name_fight" ]
+	[ "$repo_name_left" = "$repo_name_right" ]
 }
 
 transfer() {
@@ -1543,7 +1709,7 @@ ownership() {
 	# }
 
 	# # File name might have spaces
-	# local found_folder_onwership_issue=0
+	# local found_folder_ownership_issue=0
 	# local item_user
 	# local ifs="$IFS"
 	# local IFS="$newline"
@@ -1562,12 +1728,12 @@ ownership() {
 	#   // war '$item_user' "$item_user"
 	#   // war '$reference_user' "$reference_user"
 
-	#   found_folder_onwership_issue=1
+	#   found_folder_ownership_issue=1
 	#   break
 	# done
 	# IFS="$ifs"
 	# # Won't work inside for loop with special $IFS
-	# [ "$found_folder_onwership_issue" -eq "0" ] ||
+	# [ "$found_folder_ownership_issue" -eq "0" ] ||
 	#   // transfer "$target_dir" "$reference_user" "$reference_group"
 }
 
@@ -3767,12 +3933,12 @@ as_usr() {
 
 	! equ "$1" "--" || shift 1
 
-	[ "$(id -u "$1" 2> /dev/null)" != "" ] &&
+	[ ! -z "$(id -u "$1" 2> /dev/null)" ] &&
 	user_name="$1" || local pid_name="$1"
 	shift 1
 
 	[ ! -z "${user_name:+x}" ] || {
-		[ "$(id -u "$1" 2> /dev/null)" = "" ] &&
+		[ -z "$(id -u "$1" 2> /dev/null)" ] &&
 		// die '$1' "'$1' is not a valid user name" || {
 			user_name="$1"
 			shift 1
@@ -4451,17 +4617,14 @@ kill_tree() {
 	exec 2> /dev/null
 	local user="$(awk "{print \$1}" <(printf '%s\n' "$item") | tr -d ' ')"
 	if [ "$user" = "$LOGNAME" ]; then
-		# kill -TERM "$pid" | \
-		#     grep -q "No such process \"$pid\"" 2>&1 ||
-		# grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+		# kill -TERM "$pid" 2>&1 | grep -q "No such process \"$pid\"" ||
 		kill -TERM "$pid" ||
 		# // war 'kill -TERM $pid' "'$(delegate -- format "$pid")' : '$item' fialed"
 		// debug_filter -- printf '%s %s\n' 'kill -TERM' "'$pid' '$item' fialed"
 		# fg
 	else
-		# // as_usr "root" kill -KILL "$pid" | \
-		#     grep -q "No such process \"$pid\"" 2>&1 ||
-		# grep -q "No such process \"$pid\"" > /dev/null 2>&1 ||
+		# // as_usr "root" kill -KILL "$pid" 2>&1 | \
+		#     grep -q "No such process \"$pid\"" ||
 		// as_usr "root" kill -KILL "$pid" ||
 		# // war 'kill -KILL $pid' "'$(delegate -- format "$pid")' : '$item' fialed"
 		// debug_filter -- printf '%s %s\n' 'kill -KILL' "'$pid' '$item' fialed"
@@ -4622,12 +4785,12 @@ execute() {
 		# exec 3>&2
 		# exec 2> /dev/null
 		# if [ "$user" = "$LOGNAME" ] && [ "$user" != "root" ]; then
-		#     kill -TERM "$pid_target" | grep -q "No such process \"$pid_target\"" > /dev/null 2>&1 ||
-		#     # kill -USR1 "$pid_target" | grep -q "No such process \"$pid_target\"" > /dev/null 2>&1 ||
+		#     kill -TERM "$pid_target" 2>&1 | grep -q "No such process \"$pid_target\"" ||
+		#     # kill -USR1 "$pid_target" 2>&1 | grep -q "No such process \"$pid_target\"" ||
 		#     // debug_filter -- printf '%s %s\n' 'kill -TERM' "'$pid_target' '$descibe' fialed"
 		#     # fg
 		# else
-		#     // as_usr "root" kill -KILL "$pid_target" | grep -q "No such process \"$pid_target\"" > /dev/null 2>&1 ||
+		#     // as_usr "root" kill -KILL "$pid_target" 2>&1 | grep -q "No such process \"$pid_target\"" ||
 		#     // debug_filter -- printf '%s %s\n' 'kill -9' "'$pid_target' '$descibe' fialed"
 		#     # fg
 		# fi

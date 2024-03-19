@@ -10,6 +10,24 @@ SCRIPT_NAME="functions" && export SCRIPT_NAME
 
 : "${DELIMITER:="$newline"}" && export DELIMITER
 
+is_link() {
+	[ -e "$1" ] && [ -h "$1" ]
+}
+
+is_file() {
+	[ -f "$1" ] && [ ! -h "$1" ]
+}
+
+is_folder() {
+	[ -d "$1" ] && [ ! -h "$1" ]
+}
+
+# -T is GNU specific (BusyBox's "ln" doesn't support -h), while -n doesn't work
+# \ln -sTf -- "$target" "$anchor"
+command ln 2>&1 | grep -q "\-T" && cmd_link="command ln -sfT" || {
+command ln 2>&1 | grep -q "\-h" && cmd_link="command ln -sfh"; } ||
+cmd_link="command ln -sf"
+
 case "$(type env_reset > /dev/null 2>&1 && type env_reset)" in *"function"*|*"alias"*) ;;
 	*)
 	_env_reset() {
@@ -245,7 +263,7 @@ esceval() {
 # This delegation makes it sure of only getting the printf content after the last \n,
 # which content comes from a function like
 # delegated_function() { printf "$RS%s$FSs" "$field_00" "$field_01"; }
-# Actually the returned content began with an "$RS" 
+# Actually the returned content began with an "$RS"
 # local var="$(   delegate    delegated_function "$@")"
 # local var="$(   delegate -- delegated_function "$@")"
 # local var="$(// delegate -- delegated_function "$@")"

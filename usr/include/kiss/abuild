@@ -134,7 +134,11 @@ default_fetch()          { // log "$FUNCNAME" "passed"; }
 default_unpack()         { // log "$FUNCNAME" "passed"; }
 # abuild/abuild.in:default_prepare() {
 default_prepare()        {
+	// log '$PWD' "$PWD"
+	set +f
 	for item in *.patch; do
+		set -f
+		[ -f "$item" ] || continue
 		// log 'patching' "$item"
 		patch -p1 < "$item" || // die "$item" "patching failed"
 	done
@@ -168,7 +172,7 @@ default_doc()            {
 		-a \! \( -name '*.gz' -o -name '*.bz2' -o -name '*.xz' \) \
 		| while read symlink; do
 
-		ln -s $(readlink $symlink).gz "$symlink".gz
+		$cmd_link -- $(readlink $symlink).gz "$symlink".gz
 		rm -f "$symlink"
 	done
 	[ -d "$mandir" ] && find "$mandir" -type f \
@@ -187,7 +191,7 @@ default_doc()            {
 			if [ "$linode" = "$inode" -a "$lname" != "$name" ]; then
 				islink=1
 				rm -f "$lname"
-				ln -s "${name##*/}".gz "$lname".gz
+				$cmd_link -- "${name##*/}".gz "$lname".gz
 			fi
 		done
 

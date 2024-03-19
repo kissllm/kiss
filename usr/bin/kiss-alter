@@ -65,7 +65,37 @@ log_dir="$KISS_TMPDIR/logs"
 # }
 
 // log 'inside' "kiss-alter"
-#
+
+# Usage:
+# // ver_mount "$KISS_ROOT/usr/lib/clang" "$mount_point_name" "$version_target"
+ver_mount() {
+	local location="$1"
+	local mount_point_name="$2"
+	local version_target="$3"
+
+	# cd "$KISS_ROOT/usr/lib/clang"
+	cd "$location" || // die '$location' "'$location' can not be accessed by '$LOGNAME'"
+
+	is_folder "$mount_point_name" && {
+		# [ ! -d ".backup" ] || \rm -rf ".backup"
+		rsync -aqz "$mount_point_name" ".backup/" && sync
+		\rm -rf "$mount_point_name"
+		$cmd_link -- "$version_target" "$mount_point_name"
+	} || {
+		# {
+		# 	[ ! -d "$mount_point_name" ] || [ -h "$mount_point_name" ]
+		# } && {
+		[ ! -h "$mount_point_name" ] && {
+			[ ! -f "$mount_point_name" ] || rm -f "$mount_point_name"
+			$cmd_link -- "$version_target" "$mount_point_name"
+		} ||
+		[ "$(readlink -fn "$mount_point_name")" = "$(readlink -fn "$version_target")" ] || {
+			rm -f "$mount_point_name"
+			$cmd_link -- "$version_target" "$mount_point_name"
+		}
+	}
+}
+
 # Double included kiss/share
 # type_include "is_repos" "function" "/usr/bin/kiss"
 #
@@ -327,11 +357,11 @@ install_files() {
 				# Atomically move the temporary file to its final destination.
 				# The running processes will either get the old file or the new one.
 				#
-				# "$@" \mv -f "$__tmp" "$_file" ||
-				# // die "mv $__tmp to" "'$_file' failed"
+				"$@" \mv -f "$__tmp" "$_file" ||
+				// die "mv $__tmp to" "'$_file' failed"
 				# Extremely slow
-				"$@" rsync -aqX --remove-source-files "$__tmp" "$_file" ||
-				// die "$@ rsync -aqX --remove-source-files \"$__tmp\" \"$_file\"" "failed"
+				# "$@" rsync -aqX --no-o --no-g --remove-source-files "$__tmp" "$_file" ||
+				# // die "$@ rsync -aqX --remove-source-files \"$__tmp\" \"$_file\"" "failed"
 			fi
 	esac || return 1; done
 	"$@" sync
@@ -559,7 +589,14 @@ manifest_validate() {
 	[ -f "$EXTRACT_ROOT/$repo_name/$db/$repo_name/manifest" ] ||
 	// die '$tar_manifest' "'$tar_manifest' does not exist"
 	local index=0
+	local line
 	while read -r line; do
+		case "$line" in
+			"$sys_ch/") continue ;;
+			"$sys_ch"*)
+			line="${line#"$sys_ch/$repo_name"}"
+			line="$(// delegate -- replace "$line" '/' '>')"
+		esac
 		[ -e "$EXTRACT_ROOT/$repo_name$line" ] ||
 		[ -h "$EXTRACT_ROOT/$repo_name$line" ] || {
 			: $((index += 1))
@@ -859,7 +896,7 @@ conflicts() {
 
 	# Rewrite the package's manifest to update its location
 	# to its new spot (and name) in the choices directory.
-	// pkg_manifest "$repo_urn" "$EXTRACT_ROOT" & // progress "$!" "manifest checking"
+	// pkg_manifest "$repo_urn" "$EXTRACT_ROOT" & // progress "$repo_name" "$!" "manifest checking"
 }
 
 # $1 repo_urn : package path
@@ -906,11 +943,11 @@ pkg_install() {
 		*.tar.*)
 			// log 'tar $repo_urn' "$repo_urn"
 			tar_file="$repo_urn"
-			format="$(// delegate -- pkg_format "$repo_urn")"
+			format="$(// delegate -- repo_type "$repo_urn")"
 			# / "IFS=$(printf '%b' "$FS") read -r \
 			#   format reference_type \
-			#   << $(// here_doc -- pkg_format "$repo_urn")" \
-			#   > /dev/null || { // die 'pkg_format' "failed"; exit 1; }
+			#   << $(// here_doc -- repo_type "$repo_urn")" \
+			#   > /dev/null || { // die 'repo_type' "failed"; exit 1; }
 			// log '$format' "$format"
 
 			[ -f "$tar_file" ] ||
@@ -967,8 +1004,8 @@ pkg_install() {
 		// as_usr "root" \rm -rf "$item"
 	done
 
-	empty "$TEMP_ROOT/$repo_name" ||
-	// as_own "$TEMP_ROOT" find "$TEMP_ROOT/$repo_name" -mindepth 1 -delete
+	empty "$BUF_ROOT/$repo_name" ||
+	// as_own "$BUF_ROOT" find "$BUF_ROOT/$repo_name" -mindepth 1 -delete
 
 	// mkcd "$extract_dir" "$extract_db_dir/$repo_name" "$pkg_db_dir/$repo_name" ||
 		// die 'mkcd' "failed"
@@ -1005,7 +1042,7 @@ pkg_install() {
 	# Intended behavior.
 	# shellcheck disable=2030,2031
 	[ -n "${KISS_FORCE+x}" ] || {
-		// manifest_validate "$repo_name"
+		// manifest_validate "$repo_name" & // progress "$repo_name" "$!" "manifest validating"
 		// installable "$repo_name" "$extract_db_dir/$repo_name/depends"
 	}
 
@@ -1024,11 +1061,11 @@ pkg_install() {
 	}
 
 	[ ! -z "$format" ] || {
-		format="$(// delegate -- pkg_format "$repo_urn")"
+		format="$(// delegate -- repo_type "$repo_urn")"
 		# / "IFS=$(printf '%b' "$FS") read -r \
 		#   format reference_type \
-		#   << $(// here_doc -- pkg_format "$repo_urn")" \
-		#   > /dev/null || { // die 'pkg_format' "failed"; exit 1; }
+		#   << $(// here_doc -- repo_type "$repo_urn")" \
+		#   > /dev/null || { // die 'repo_type' "failed"; exit 1; }
 	}
 	// log '$format' "$format"
 
@@ -1038,10 +1075,10 @@ pkg_install() {
 	// log '$target_source' "$target_source"
 	// log '$KISS_ROOT' "$KISS_ROOT"
 	// log '$KISS_ROOT/$db' "$KISS_ROOT/$db"
+	# $VOLATILE/extract
 	// log '$EXTRACT_ROOT' "$EXTRACT_ROOT"
-	# $HOME/.cache/kiss/proc/extract
-	// log '$PKG_ROOT' "$PKG_ROOT"
 	# $HOME/.cache/kiss/proc/pkg
+	// log '$PKG_ROOT' "$PKG_ROOT"
 	// log '$db' "$db"
 	// log '$repo_name' "$repo_name"
 	// log '$pkg_db_dir/$repo_name' "$pkg_db_dir/$repo_name"
@@ -1069,7 +1106,7 @@ pkg_install() {
 	// run_hook     pre-install "$repo_name" "$extract_dir"
 	// run_hook_pkg pre-install "$repo_name" "$repo_ver" "$repo_rel" "$repo_dir"
 
-	// conflicts "$repo_name" & // progress "$!" "conflicts checking"
+	// conflicts "$repo_name" & // progress "$repo_name" "$!" "conflicts checking"
 
 	// log "$repo_name" "installing package (${tar_file##*/})"
 
@@ -1140,7 +1177,7 @@ pkg_install() {
 			// die "$repo_name" "The file system is currently in a dirty state and requires manual maintenance"
 		}
 	} & install_id=$!
-	// progress "$install_id" "installing"
+	// progress "$repo_name" "$install_id" "installing"
 
 	# Reset 'trap' to its original value. Installation is done so we no longer
 	# need to block 'Ctrl-C'.
@@ -1774,7 +1811,7 @@ pkg_alternatives() {
 			[ "$index" -eq "0" ] &&
 			// war '$index' "'$(// delegate -- format $index)' file  processed" ||
 			// war '$index' "'$(// delegate -- format $index)' files processed"
-		) & // progress "$!" "activate $repo_activate"
+		) & // progress "$repo_activate" "$!" "activate $repo_activate"
 	elif ok "$repo_activate" && equ "$1" "-"; then
 		// war '$repo_activate' "Input new binary path like '/usr/bin/llvm-ar'${newline}\
 			which beclong to repo '$repo_activate', please${newline}\
@@ -1892,72 +1929,75 @@ subshell_all() {
 		# SHELL_OPTIONS=\"e$(printf '%s' "$-")\" \
 
 		local env_variables=" RUSTFLAGS=\"--remap-path-prefix=${PWD=.} -Clinker=rust-lld ${RUSTFLAGS-}\" "
-		# environment "RUSTFLAGS" "--remap-path-prefix=${PWD=.} -Clinker=rust-lld ${RUSTFLAGS-}"
+		# environment ENV_VARIABLES "RUSTFLAGS" "--remap-path-prefix=${PWD=.} -Clinker=rust-lld ${RUSTFLAGS-}"
 		env_variables="$env_variables KISS_XHOST_ARCH=\"$KISS_XHOST_ARCH\" "
-		# environment "KISS_XHOST_ARCH" "$KISS_XHOST_ARCH"
+		# environment ENV_VARIABLES "KISS_XHOST_ARCH" "$KISS_XHOST_ARCH"
 		env_variables="$env_variables KISS_XBUILD_ARCH=\"$KISS_XHOST_ARCH\" "
-		# environment "KISS_XBUILD_ARCH" "$KISS_XHOST_ARCH"
+		# environment ENV_VARIABLES "KISS_XBUILD_ARCH" "$KISS_XHOST_ARCH"
 		env_variables="$env_variables CHOST=\"${KISS_XHOST_TRIPLE}\" "
-		# environment "CHOST" "$KISS_XHOST_TRIPLE"
+		# environment ENV_VARIABLES "CHOST" "$KISS_XHOST_TRIPLE"
 		env_variables="$env_variables CBUILD=\"${KISS_XBUILD_TRIPLE}\" "
-		# environment "CBUILD" "$KISS_XBUILD_TRIPLE"
+		# environment ENV_VARIABLES "CBUILD" "$KISS_XBUILD_TRIPLE"
 		env_variables="$env_variables KISS_XHOST_ABI=\"$KISS_XHOST_ABI\" "
-		# environment "KISS_XHOST_ABI" "$KISS_XHOST_ABI"
+		# environment ENV_VARIABLES "KISS_XHOST_ABI" "$KISS_XHOST_ABI"
 		env_variables="$env_variables KISS_XBUILD_ABI=\"$KISS_XBUILD_ABI\" "
-		# environment "KISS_XBUILD_ABI" "$KISS_XBUILD_ABI"
+		# environment ENV_VARIABLES "KISS_XBUILD_ABI" "$KISS_XBUILD_ABI"
 		env_variables="$env_variables KISS_XHOST_TRIPLE=\"$KISS_XHOST_ARCH-linux-$KISS_XHOST_ABI\" "
-		# environment "KISS_XHOST_TRIPLE" "$KISS_XHOST_ARCH-linux-$KISS_XHOST_ABI"
+		# environment ENV_VARIABLES "KISS_XHOST_TRIPLE" "$KISS_XHOST_ARCH-linux-$KISS_XHOST_ABI"
 		env_variables="$env_variables KISS_XBUILD_TRIPLE=\"$KISS_XBUILD_ARCH-linux-$KISS_XBUILD_ABI\" "
-		# environment "KISS_XBUILD_TRIPLE" "$KISS_XBUILD_ARCH-linux-$KISS_XBUILD_ABI"
+		# environment ENV_VARIABLES "KISS_XBUILD_TRIPLE" "$KISS_XBUILD_ARCH-linux-$KISS_XBUILD_ABI"
 		env_variables="$env_variables DEST_ROOT=\"$DEST_ROOT\" "
-		# environment "DEST_ROOT" "$DEST_ROOT"
+		# environment ENV_VARIABLES "DEST_ROOT" "$DEST_ROOT"
 		env_variables="$env_variables KISS_COMPRESS=\"$KISS_COMPRESS\" "
-		# environment "KISS_COMPRESS" "$KISS_COMPRESS"
+		# environment ENV_VARIABLES "KISS_COMPRESS" "$KISS_COMPRESS"
 		env_variables="$env_variables KISS_ROOT=\"$KISS_ROOT\" "
-		# environment "KISS_ROOT" "$KISS_ROOT"
+		# environment ENV_VARIABLES "KISS_ROOT" "$KISS_ROOT"
 		env_variables="$env_variables KISS_REPO=\"$KISS_REPO\" "
-		# environment "KISS_REPO" "$KISS_REPO"
+		# environment ENV_VARIABLES "KISS_REPO" "$KISS_REPO"
 		env_variables="$env_variables SESSION_PID=\"$SESSION_PID\" "
-		# environment "SESSION_PID" "$SESSION_PID"
+		# environment ENV_VARIABLES "SESSION_PID" "$SESSION_PID"
 		env_variables="$env_variables KISS_PID=\"$KISS_PID\" "
-		# environment "KISS_PID" "$KISS_PID"
+		# environment ENV_VARIABLES "KISS_PID" "$KISS_PID"
 		env_variables="$env_variables CROSS_ACTION=\"${CROSS_ACTION:-"$action"}\" "
 		# CROSS_ACTION="${CROSS_ACTION:-"$action"}"
-		# environment "CROSS_ACTION" "${CROSS_ACTION:-"$action"}"
+		# environment ENV_VARIABLES "CROSS_ACTION" "${CROSS_ACTION:-"$action"}"
 		env_variables="$env_variables SHELL_OPTIONS=\"$SHELL_OPTIONS\" "
-		# environment "SHELL_OPTIONS" "$SHELL_OPTIONS"
+		# environment ENV_VARIABLES "SHELL_OPTIONS" "$SHELL_OPTIONS"
 		env_variables="$env_variables REPO_BASE=\"$REPO_BASE\" "
-		# environment "REPO_BASE" "$REPO_BASE"
+		# environment ENV_VARIABLES "REPO_BASE" "$REPO_BASE"
 		env_variables="$env_variables REPO_DIR=\"$REPO_DIR\" "
-		environment "REPO_DIR" "$REPO_DIR"
+
+		# ENV_VARIABLES might be readonly ?
+		# environment ENV_VARIABLES "REPO_DIR" "$REPO_DIR"
+
 		env_variables="$env_variables SRC_ROOT=\"$SRC_ROOT\" "
-		# environment "SRC_ROOT" "$SRC_ROOT"
+		# environment ENV_VARIABLES "SRC_ROOT" "$SRC_ROOT"
 		env_variables="$env_variables MAKE_ROOT=\"$MAKE_ROOT\" "
-		# environment "MAKE_ROOT" "$MAKE_ROOT"
+		# environment ENV_VARIABLES "MAKE_ROOT" "$MAKE_ROOT"
 		env_variables="$env_variables OBJ_ROOT=\"$OBJ_ROOT\" "
-		# environment "OBJ_ROOT" "$OBJ_ROOT"
+		# environment ENV_VARIABLES "OBJ_ROOT" "$OBJ_ROOT"
 		env_variables="$env_variables DESTDIR=\"$PKG_ROOT/$repo_name\" "
 		# DESTDIR="$PKG_ROOT/$repo_name"
-		environment "DESTDIR" "$PKG_ROOT/$repo_name"
+		# environment ENV_VARIABLES "DESTDIR" "$PKG_ROOT/$repo_name"
 
 		# OUTPUT_DIR="$OBJ_ROOT/$repo_name"
 		env_variables="$env_variables OUTPUT_DIR=\"$OBJ_ROOT/$repo_name\" "
-		environment "OUTPUT_DIR" "$OBJ_ROOT/$repo_name"
+		# environment ENV_VARIABLES "OUTPUT_DIR" "$OBJ_ROOT/$repo_name"
 
 		[ -z "${DEBUG_AT_BACKGROUND+x}" ] || {
 			env_variables="$env_variables DEBUG_AT_BACKGROUND=\"$DEBUG_AT_BACKGROUND\" "
-			# environment "DEBUG_AT_BACKGROUND" "$DEBUG_AT_BACKGROUND"
+			# environment ENV_VARIABLES "DEBUG_AT_BACKGROUND" "$DEBUG_AT_BACKGROUND"
 		}
 		[ -z "${KISS_FORCE+x}" ] || {
 			env_variables="$env_variables KISS_FORCE=\"$KISS_FORCE\" "
-			# environment "KISS_FORCE" "$KISS_FORCE"
+			# environment ENV_VARIABLES "KISS_FORCE" "$KISS_FORCE"
 		}
 		# Pipe design hides the standard output
 		# $ROOT_OUTPUT is not necessary
 		# as_own "$KISS_ROOT/" sh -c "tee -a $ROOT_OUTPUT < $pipe" &
 
 		env_variables="$env_variables KISS_ALTER_AS_LIBRARY=\"\" "
-		# environment "KISS_ALTER_AS_LIBRARY" "${KISS_ALTER_AS_LIBRARY-}"
+		# environment ENV_VARIABLES "KISS_ALTER_AS_LIBRARY" "${KISS_ALTER_AS_LIBRARY-}"
 
 		# / "$env_variables \
 		#   . \"/usr/bin/kiss-alter\" \"$action\" \"$repo_urn\" 2>&1" && {
